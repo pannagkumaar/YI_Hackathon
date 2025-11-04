@@ -23,7 +23,7 @@ It enables intelligent, autonomous coordination between agents using a service r
 First, clone this repository and install dependencies.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/pannagkumaar/YI_Hackathon
 cd project-shiva
 
 # (Recommended) Create a virtual environment

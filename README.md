@@ -24,7 +24,7 @@ First, clone this repository and install dependencies.
 
 ```bash
 git clone https://github.com/pannagkumaar/YI_Hackathon
-cd project-shiva
+cd YI_Hackathon
 
 # (Recommended) Create a virtual environment
 python -m venv venv

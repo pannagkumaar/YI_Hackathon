@@ -1,9 +1,15 @@
-from fastapi import FastAPI, HTTPException
+# 📄 directory_service.py
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import uvicorn
+from security import get_api_key # Import our new auth function
 
-app = FastAPI(title="Directory Service", description="Central registry for all SHIVA services.")
+app = FastAPI(
+    title="Directory Service",
+    description="Central registry for all SHIVA services.",
+    dependencies=[Depends(get_api_key)] # Apply auth to all endpoints
+)
 
 # In-memory database for services
 services = {}

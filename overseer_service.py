@@ -1,20 +1,31 @@
-from fastapi import FastAPI
+# 📄 overseer_service.py
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 import uvicorn
 import requests
 import threading
 import time
+from security import get_api_key # Import our new auth function
 
-app = FastAPI(title="Overseer Service", description="Observability, logging, and kill-switch for SHIVA.")
+# --- Authentication & Service Constants ---
+app = FastAPI(
+    title="Overseer Service",
+    description="Observability, logging, and kill-switch for SHIVA.",
+    dependencies=[Depends(get_api_key)] # Apply auth to all endpoints
+)
+
+API_KEY = "mysecretapikey"
+AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
+DIRECTORY_URL = "http://localhost:8005"
+SERVICE_NAME = "overseer-service"
+SERVICE_PORT = 8004
+# --- End Authentication & Service Constants ---
 
 # In-memory log storage
 logs = []
 # System status
 status = {"system": "RUNNING"}
 
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "overseer-service"
-SERVICE_PORT = 8004
 
 class LogEntry(BaseModel):
     service: str
@@ -32,10 +43,9 @@ def register_self():
                 "service_name": SERVICE_NAME,
                 "service_url": service_url,
                 "ttl_seconds": 60
-            })
+            }, headers=AUTH_HEADER) # Auth
             if r.status_code == 200:
                 print(f"[Overseer] Successfully registered with Directory at {DIRECTORY_URL}")
-                # Start heartbeat thread
                 threading.Thread(target=heartbeat, daemon=True).start()
                 break
             else:
@@ -54,17 +64,15 @@ def heartbeat():
                 "service_name": SERVICE_NAME,
                 "service_url": service_url,
                 "ttl_seconds": 60
-            })
+            }, headers=AUTH_HEADER) # Auth
             print("[Overseer] Heartbeat sent to Directory.")
         except requests.exceptions.ConnectionError:
             print("[Overseer] Failed to send heartbeat. Will retry registration.")
-            # If heartbeat fails, try to re-register
             register_self()
-            break # Exit this thread, register_self will start a new one
+            break 
 
 @app.on_event("startup")
 def on_startup():
-    # Run registration in a separate thread to not block startup
     threading.Thread(target=register_self, daemon=True).start()
 
 @app.post("/log/event", status_code=201)

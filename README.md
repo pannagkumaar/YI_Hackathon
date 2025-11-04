@@ -110,10 +110,21 @@ You should see:
 ```text
 [Manager] Successfully registered with Directory...
 ```
+### 🧰 Terminal 6: Resource Hub — "The Armory"
+
+```bash
+python resource_hub_service.py
+```
+
+You should see:
+
+```text
+[ResourceHub] Successfully registered with Directory...
+```
 
 ---
 
-At this point, all **five services** are running and communicating successfully.
+At this point, all **six services** are running and communicating successfully.
 
 ---
 
@@ -127,28 +138,33 @@ python test_invoke.py
 
 This script will:
 
-1. Check the Directory to confirm all services are registered  
-2. Send a new task to the Manager  
-3. Validate that the Guardian approves the plan  
-4. Have the Partner execute the task  
-5. Test the Overseer’s **kill-switch** functionality  
+1. Check the Directory to confirm all 6 services are registered.
+2. Send a new task (e.g., "Deploy model") to the Manager.
+3. The Manager will ask the Guardian to validate the plan.
+4. The Guardian will fetch policies from the Resource Hub to approve it.
+5. The Manager will ask the Partner to execute the task.
+6. The Partner will ask the Guardian to validate its specific action.
+7. All services will log their actions to the Overseer.
+8. The test will then trigger the kill-switch to confirm the system halts.
 
 ---
 
 ### 👀 What to Watch
 
-Look at all your terminals — you’ll see the **chain of command** unfold in real time:
+Look at all your terminals — you’ll see the chain of command unfold in real time:
 
-1. `test_invoke.py` sends a request to the **Manager**  
-2. **Manager** logs to the **Overseer**  
-3. **Manager** discovers the **Guardian** via the **Directory**  
-4. **Manager** asks the **Guardian** to validate the plan  
-5. **Guardian** logs its validation  
-6. **Manager** discovers the **Partner** via the **Directory**  
-7. **Manager** asks the **Partner** to execute the first step  
-8. **Partner** logs its execution *(Reason → Act → Observe)*  
-9. **Manager** logs the final result to the **Overseer**  
-10. `test_invoke.py` then tests the **kill-switch**, and the **Manager** rejects a new task  
+1.  `test_invoke.py` sends a request to the Manager.
+2.  Manager logs to the Overseer.
+3.  Manager discovers the Guardian (via Directory).
+4.  Manager asks Guardian to validate the plan.
+5.  Guardian discovers the Resource Hub (via Directory).
+6.  Guardian fetches policies from Resource Hub and logs to Overseer.
+7.  Manager discovers the Partner (via Directory).
+8.  Manager asks Partner to execute.
+9.  Partner discovers the Guardian (via Directory).
+10. Partner asks Guardian to validate its action.
+11. Partner logs its execution (Reason → Validate → Act → Observe) to Overseer.
+12. Manager logs the final result to the Overseer.
 
 ---
 
@@ -160,32 +176,42 @@ Look at all your terminals — you’ll see the **chain of command** unfold in r
 
 ```text
          +------------------+
-         |  test_invoke.py  |
-         +--------+---------+
-                  |
-                  v
-         +--------+---------+
-         |    Manager        |
-         +--------+---------+
-                  |
-        +---------+----------+
-        |                    |
-        v                    v
-  +-----------+        +-------------+
-  |  Guardian  |        |   Partner   |
-  +-----------+        +-------------+
-        \                    /
-         \                  /
-          \                /
-           v              v
-            +-------------+
-            |   Overseer  |
-            +-------------+
-                  ^
-                  |
-         +--------+---------+
-         |    Directory     |
-         +------------------+
+                     |  test_invoke.py  |
+                     +--------+---------+
+                              |
+                              v
+                     +--------+---------+
+                     |     Manager      | (Orchestrator)
+                     +------------------+
+                              |
+                +-------------+-------------+
+(Validate Plan) |                           | (Execute Step)
+                v                           v
+          +-----------+               +-------------+
+          |  Guardian |               |   Partner   | (Worker)
+          +-----------+<--------------+-------------+
+                |      (Validate Action)
+    (Get Policy)|
+                v
+          +--------------+
+          | Resource Hub | (Armory/Library)
+          +--------------+
+
+     (All 4 services above register/discover with Directory
+      and log to Overseer)
+
+               \      |      /      /
+                \     |     /      /
+                 \    |    /      /
+                  v   v   v      v
+                   +-------------+
+                   |   Overseer  | (Logging)
+                   +-------------+
+                         ^
+                         | (Discovery)
+                   +-------------+
+                   |  Directory  | (Registry)
+                   +-------------+
 ```
 
 ---
@@ -195,11 +221,12 @@ Look at all your terminals — you’ll see the **chain of command** unfold in r
 - Python 3.9+  
 - Dependencies listed in `requirements.txt`  
 - Localhost ports (default):
+  - Manager: **8001**
+  - Partner: **8002**
+  - Guardian: **8003**
+  - Overseer: **8004**
   - Directory: **8005**
-  - Overseer: **8006**
-  - Guardian: **8007**
-  - Partner: **8008**
-  - Manager: **8009**
+  - Resource Hub: **8006**
 
 ---
 

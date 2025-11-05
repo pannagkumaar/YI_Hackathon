@@ -1,9 +1,10 @@
 # 📄 overseer_service.py
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import requests
+import httpx # Use httpx for async
 import threading
 import time
 import json
@@ -12,8 +13,6 @@ from typing import List
 from security import get_api_key
 
 # --- Authentication & Service Constants ---
-
-# REMOVED: dependencies=[Depends(get_api_key)] from here
 app = FastAPI(
     title="Overseer Service",
     description="Observability, logging, and kill-switch for SHIVA."
@@ -62,7 +61,13 @@ class LogEntry(BaseModel):
     message: str
     context: dict = {}
 
-# --- Service Registration (No changes) ---
+# --- NEW: Model for Replanning ---
+class ReplanRequest(BaseModel):
+    goal: str
+    context: dict = {}
+# ---
+
+# --- Service Registration (No change) ---
 def register_self():
     while True:
         try:
@@ -104,13 +109,12 @@ def on_startup():
 
 # --- API Endpoints (UPDATED) ---
 
-# NEW: Serve the HTML Dashboard (No dependency)
+# --- Endpoints for UI (No auth) ---
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard():
     with open("overseer_dashboard.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
-# NEW: WebSocket endpoint (No dependency)
 @app.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -121,8 +125,68 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
         print("[Overseer] Client disconnected from WebSocket.")
 
+# --- NEW: UI Proxy Endpoints (No auth) ---
+# These endpoints are called by the dashboard's JavaScript.
+# They securely call the Manager service with the API key.
 
-# UPDATED: All other endpoints NOW individually require auth
+async def discover_manager() -> str:
+    """Internal helper to find the Manager"""
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(
+                f"{DIRECTORY_URL}/discover",
+                params={"service_name": "manager-service"},
+                headers=AUTH_HEADER
+            )
+            r.raise_for_status()
+            return r.json()["url"]
+        except Exception as e:
+            print(f"[Overseer] FAILED to discover Manager for UI: {e}")
+            raise HTTPException(500, detail="Could not discover Manager Service")
+
+@app.get("/ui/tasks", status_code=200)
+async def get_ui_tasks():
+    """Proxy for UI to fetch all tasks from Manager."""
+    try:
+        manager_url = await discover_manager()
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{manager_url}/tasks/list", headers=AUTH_HEADER)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/ui/approve_task/{task_id}", status_code=202)
+async def approve_ui_task(task_id: str):
+    """Proxy for UI to approve a task on the Manager."""
+    try:
+        manager_url = await discover_manager()
+        async with httpx.AsyncClient() as client:
+            r = await client.post(f"{manager_url}/task/{task_id}/approve", headers=AUTH_HEADER)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/ui/replan_task/{task_id}", status_code=202)
+async def replan_ui_task(task_id: str, request: ReplanRequest):
+    """Proxy for UI to replan a task on the Manager."""
+    try:
+        manager_url = await discover_manager()
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{manager_url}/task/{task_id}/replan",
+                json=request.dict(),
+                headers=AUTH_HEADER
+            )
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+# --- END: UI Proxy Endpoints ---
+
+
+# --- Secure Internal Endpoints (Need auth) ---
 @app.post("/log/event", status_code=201)
 async def log_event(entry: LogEntry, api_key: str = Depends(get_api_key)):
     log_data = entry.dict()

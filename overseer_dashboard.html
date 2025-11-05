@@ -1,72 +1,177 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-WARNING">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Overseer Live Logs</title>
+    <title>Overseer Dashboard</title>
     <style>
-        body { font-family: monospace; background-color: #111; color: #eee; }
-        h1 { color: #0f0; }
-        #logs { width: 95%; height: 500px; overflow-y: scroll; border: 1px solid #555; background-color: #222; padding: 10px; }
+        body { font-family: monospace; background-color: #111; color: #eee; display: flex; }
+        .container { width: 50%; padding: 10px; }
+        h1, h2 { color: #0f0; border-bottom: 1px solid #0f0; }
+        h2 { color: #0af; border-bottom: 1px solid #0af; }
+
+        /* Log Panel */
+        #logs { width: 95%; height: 700px; overflow-y: scroll; border: 1px solid #555; background-color: #222; padding: 10px; }
         pre { margin: 5px 0; white-space: pre-wrap; word-wrap: break-word; }
         .INFO { color: #0f0; }
         .WARN { color: #ff0; }
         .ERROR { color: #f00; }
+        
+        /* Task Panel */
+        #tasks { width: 95%; height: 700px; overflow-y: scroll; border: 1px solid #555; background-color: #222; padding: 10px; }
+        .task-card { border: 1px solid #777; background-color: #333; padding: 10px; margin-bottom: 10px; }
+        .task-card h3 { margin: 0 0 5px 0; }
+        .task-card p { margin: 2px 0; }
+        .task-id { font-size: 0.8em; color: #aaa; }
+        .task-status { font-weight: bold; }
+        
+        /* Status Colors */
+        .PENDING, .STARTING, .PLANNING, .CHECKING_HALT, .VALIDATING_PLAN, .RESUMING, .REPLANNING { color: #0af; } /* Blue */
+        .EXECUTING_STEP { color: #0f0; } /* Green */
+        .PAUSED_DEVIATION, .ACTION_REJECTED, .REJECTED { color: #ff0; } /* Yellow */
+        .FAILED { color: #f00; } /* Red */
+        .COMPLETED { color: #0f0; } /* Green */
+
+        /* Buttons */
+        button { background-color: #0f0; color: #111; border: none; padding: 5px 10px; cursor: pointer; }
+        button.replan { background-color: #ff0; }
     </style>
 </head>
 <body>
-    <h1>🛰️ Overseer - Live Log Stream</h1>
-    <div id="logs">
-        <pre id="status">Connecting to WebSocket...</pre>
+
+    <div class="container">
+        <h2>👨‍💼 Task Dashboard (Refreshes every 2s)</h2>
+        <div id="tasks">
+            <pre>Loading tasks...</pre>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>🛰️ Overseer - Live Log Stream</h1>
+        <div id="logs">
+            <pre id="status">Connecting to WebSocket...</pre>
+        </div>
     </div>
 
     <script>
         const logsContainer = document.getElementById("logs");
         const statusElement = document.getElementById("status");
-        const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
+        const tasksContainer = document.getElementById("tasks");
 
+        // --- 1. Log WebSocket ---
+        const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
         ws.onopen = () => {
-            console.log("WebSocket Connected");
             statusElement.textContent = "Connected. Waiting for logs...";
             statusElement.className = "INFO";
         };
-
         ws.onmessage = (event) => {
-            // Clear the "waiting" message on first log
-            if (statusElement) {
-                statusElement.remove();
-            }
-
+            if (statusElement) statusElement.remove();
             const logData = JSON.parse(event.data);
             const logElement = document.createElement("pre");
-            
-            // Add a class for color-coding
             logElement.className = logData.level;
-
-            // Format the log message
             logElement.textContent = `[${logData.service}][${logData.task_id}][${logData.level}] ${logData.message}`;
-            
             logsContainer.appendChild(logElement);
-
-            // Auto-scroll to bottom
             logsContainer.scrollTop = logsContainer.scrollHeight;
         };
-
         ws.onclose = () => {
-            console.log("WebSocket Disconnected");
             const errorElement = document.createElement("pre");
             errorElement.className = "ERROR";
-            errorElement.textContent = "WebSocket disconnected. Please refresh the page.";
+            errorElement.textContent = "WebSocket disconnected. Please refresh.";
             logsContainer.appendChild(errorElement);
         };
-
         ws.onerror = (error) => {
-            console.error("WebSocket Error:", error);
             const errorElement = document.createElement("pre");
             errorElement.className = "ERROR";
             errorElement.textContent = "WebSocket connection error.";
             logsContainer.appendChild(errorElement);
         };
+
+        // --- 2. Task Dashboard Polling ---
+        setInterval(fetchTasks, 2000);
+
+        async function fetchTasks() {
+            try {
+                const response = await fetch("/ui/tasks");
+                const tasks = await response.json();
+                
+                if (!Array.isArray(tasks)) {
+                    tasksContainer.innerHTML = `<pre class="ERROR">Error loading tasks: ${tasks.error || 'Unknown error'}</pre>`;
+                    return;
+                }
+                
+                tasksContainer.innerHTML = ""; // Clear old tasks
+                if (tasks.length === 0) {
+                    tasksContainer.innerHTML = `<pre>No tasks submitted yet.</pre>`;
+                    return;
+                }
+
+                // Sort tasks: Paused/Failed first, then newest
+                tasks.sort((a, b) => {
+                    const statusA = a.status.toUpperCase();
+                    const statusB = b.status.toUpperCase();
+                    if (statusA.includes("PAUSED") || statusA.includes("REJECTED")) return -1;
+                    if (statusB.includes("PAUSED") || statusB.includes("REJECTED")) return 1;
+                    return 0; // In a real app, sort by date
+                });
+
+                tasks.forEach(task => {
+                    tasksContainer.appendChild(createTaskCard(task));
+                });
+
+            } catch (error) {
+                tasksContainer.innerHTML = `<pre class="ERROR">Failed to fetch tasks: ${error}</pre>`;
+            }
+        }
+
+        function createTaskCard(task) {
+            const card = document.createElement("div");
+            card.className = "task-card";
+
+            const statusClass = task.status.startsWith("EXECUTING_STEP") ? "EXECUTING_STEP" : task.status;
+            
+            let buttons = "";
+            if (task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED") {
+                buttons = `
+                    <p>
+                        <button onclick="approveTask('${task.task_id}')">Approve/Resume</button>
+                        <button class="replan" onclick="replanTask('${task.task_id}')">Replan Task</button>
+                    </p>
+                `;
+            }
+
+            card.innerHTML = `
+                <h3>${task.goal}</h3>
+                <p class="task-id">${task.task_id}</p>
+                <p>Status: <span class="task-status ${statusClass}">${task.status}</span></p>
+                ${task.reason ? `<p class="WARN">Reason: ${task.reason}</p>` : ""}
+                ${buttons}
+            `;
+            return card;
+        }
+
+        // --- 3. UI Action Handlers ---
+        async function approveTask(taskId) {
+            console.log(`Approving ${taskId}...`);
+            await fetch(`/ui/approve_task/${taskId}`, { method: "POST" });
+            fetchTasks(); // Refresh list immediately
+        }
+
+        async function replanTask(taskId) {
+            console.log(`Replanning ${taskId}...`);
+            const newGoal = prompt("Enter the new goal for this task:", "Fix the deviation and complete the original goal.");
+            
+            if (!newGoal) return; // User cancelled
+
+            await fetch(`/ui/replan_task/${taskId}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ goal: newGoal, context: { user: "operator", reason: "Manual replan" } })
+            });
+            fetchTasks(); // Refresh list immediately
+        }
+
+        // Initial fetch
+        fetchTasks();
     </script>
 </body>
 </html>

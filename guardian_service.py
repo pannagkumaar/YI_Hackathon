@@ -6,7 +6,22 @@ import requests
 import threading
 import time
 from security import get_api_key # Import our new auth function
+from gemini_client import get_model, generate_json
+import json
 
+GUARDIAN_SYSTEM_PROMPT = """
+You are the "Guardian," a compliance and safety assistant for the SHIVA agent system.
+Your sole purpose is to evaluate a "proposed_action" or "plan" against a set of "policies."
+
+You must respond ONLY with a JSON object with two keys:
+1. "decision": Must be either "Allow" or "Deny".
+2. "reason": A brief, clear explanation for your decision.
+
+Evaluate strictly. If a policy is "Disallow: <keyword>" and the <keyword> is in the 
+proposed_action, you must "Deny" it. Also deny any plan with > 10 steps 
+as "excessively complex".
+"""
+guardian_model = get_model(system_instruction=GUARDIAN_SYSTEM_PROMPT)
 # --- Authentication & Service Constants ---
 app = FastAPI(
     title="Guardian Service",
@@ -24,24 +39,26 @@ SERVICE_PORT = 8003
 
 # --- Mock Agent Function (UPDATED) ---
 def use_agent(prompt: str, input_data: dict, policies: list) -> dict:
-    """Mock function for AI-based validation logic."""
+    """(UPDATED) AI-based validation logic using Gemini."""
     print(f"[Guardian] AI Agent called with prompt: {prompt}")
-    
-    proposed_action = input_data.get("proposed_action", "")
-    
-    # NEW: Dynamic policy check
-    for policy in policies:
-        if policy.startswith("Disallow:"):
-            keyword = policy.split(":", 1)[1].strip()
-            if keyword in proposed_action.lower():
-                return {"decision": "Deny", "reason": f"Action violates policy: '{policy}'"}
 
-    # Existing plan check
-    plan_steps = input_data.get("plan", {}).get("steps", [])
-    if len(plan_steps) > 10:
-        return {"decision": "Deny", "reason": "AI model flags plan as 'excessively complex' (>10 steps)."}
-        
-    return {"decision": "Allow", "reason": "AI model validation passed."}
+    # Construct the prompt for the model
+    prompt_parts = [
+        f"User Prompt: {prompt}\n",
+        f"Policies: {json.dumps(policies)}\n",
+        f"Input Data: {json.dumps(input_data)}\n\n",
+        "Evaluate the input and return your JSON decision (decision, reason)."
+    ]
+    
+    # Call the helper
+    validation = generate_json(guardian_model, prompt_parts)
+    
+    # Fallback in case of JSON error
+    if "error" in validation or "decision" not in validation:
+        print(f"[Guardian] AI validation failed: {validation.get('error', 'Invalid format')}")
+        return {"decision": "Deny", "reason": f"AI model error: {validation.get('error', 'Invalid format')}"}
+
+    return validation
 # --- End Mock Agent Function ---
 
 

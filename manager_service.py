@@ -8,6 +8,26 @@ import time
 import uuid
 from security import get_api_key
 
+# --- NEW: Gemini Client Setup ---
+from gemini_client import get_model, generate_json
+import json
+
+MANAGER_SYSTEM_PROMPT = """
+You are the "Manager," an AI team lead for the SHIVA agent system.
+Your job is to take a high-level "goal" from a user and break it down into a 
+clear, logical, step-by-step plan.
+
+You must respond ONLY with a JSON object with two keys:
+1. "plan_id": A unique string, (e.g., "plan-" + a few random chars).
+2. "steps": A list of objects. Each object must have:
+    - "step_id": An integer (1, 2, 3...).
+    - "goal": A string describing the specific, actionable goal for that step.
+
+The plan should be detailed and actionable for a worker agent.
+"""
+manager_model = get_model(system_instruction=MANAGER_SYSTEM_PROMPT)
+# --- End Gemini Client Setup ---
+
 # --- Authentication & Service Constants ---
 app = FastAPI(
     title="Manager Service",
@@ -31,18 +51,27 @@ class InvokeRequest(BaseModel):
 
 # --- Mock Agent Function (No change) ---
 def use_agent(prompt: str, input_data: dict) -> dict:
+    """(UPDATED) AI-based planning using Gemini."""
     print(f"[Manager] AI Agent called with prompt: {prompt}")
-    if "Create high-level plan" in prompt:
+
+    prompt_parts = [
+        f"User Prompt: {prompt}\n",
+        f"User Input: {json.dumps(input_data)}\n\n",
+        "Generate the JSON plan (plan_id, steps) for this goal."
+    ]
+    
+    plan = generate_json(manager_model, prompt_parts)
+
+    # Fallback in case of JSON error or unexpected output
+    if "error" in plan or "steps" not in plan or "plan_id" not in plan:
+        print(f"[Manager] AI planning failed: {plan.get('error', 'Invalid format')}")
+        # Return a safe, empty plan
         return {
-            "plan_id": f"plan-{uuid.uuid4().hex[:8]}",
-            "steps": [
-                {"step_id": 1, "goal": "Analyze user request for change_id: " + input_data.get("change_id")},
-                {"step_id": 2, "goal": "Fetch relevant data from Resource Hub"},
-                {"step_id": 3, "goal": "Generate deployment script"},
-                {"step_id": 4, "goal": "Finalize and report completion"}
-            ]
+            "plan_id": f"plan-fallback-{uuid.uuid4().hex[:4]}",
+            "steps": [{"step_id": 1, "goal": f"Error: AI failed to generate plan for {input_data.get('goal')}"}]
         }
-    return {"output": "Mock AI response"}
+    
+    return plan     
 
 # --- Service Discovery & Logging (No change) ---
 async def discover(client: httpx.AsyncClient, service_name: str) -> str:
@@ -128,7 +157,7 @@ async def execute_plan_from_step(task_id: str, step_index: int):
         print(f"[Manager] No plan for task {task_id}.")
         return
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         try:
             for i in range(step_index, len(plan["steps"])):
                 task["current_step_index"] = i

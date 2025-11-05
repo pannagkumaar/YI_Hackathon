@@ -9,6 +9,33 @@ import time
 import random
 from security import get_api_key
 from typing import List
+# --- NEW: Gemini Client Setup ---
+from gemini_client import get_model, generate_json
+import json
+
+PARTNER_SYSTEM_PROMPT = """
+You are "Partner," a ReAct-style AI worker agent for the SHIVA system.
+Your job is to achieve a "current_step_goal."
+You are given a "list of tools" and a "history" of your previous (Thought, Action, Observation) steps.
+
+You operate in two modes based on the "Prompt":
+
+1.  When "Prompt: Reason":
+    * Analyze the goal, history (if any), and available tools.
+    * Formulate a "thought" (your reasoning).
+    * If the goal is already met (e.g., history shows success), your action MUST be "finish_goal" and "action_input" must be {}.
+    * Otherwise, select the *one* best "action" (a tool name from the list) and the "action_input" (a dictionary of parameters for that tool).
+    * You MUST respond ONLY with a JSON object: 
+        {"thought": "...", "action": "...", "action_input": {...}}
+
+2.  When "Prompt: Observe":
+    * You will be given the "action_result" (e.g., "success", "deviation", or tool output).
+    * Summarize this result into a brief, natural language "observation".
+    * You MUST respond ONLY with a JSON object: 
+        {"observation": "..."}
+"""
+partner_model = get_model(system_instruction=PARTNER_SYSTEM_PROMPT)
+# --- End Gemini Client Setup ---
 
 # --- Authentication & Service Constants ---
 app = FastAPI(
@@ -25,34 +52,49 @@ SERVICE_PORT = 8002
 
 
 # --- Mock Agent Function (UPDATED for ReAct Loop) ---
+# --- Mock Agent Function (UPDATED for ReAct Loop) ---
 def use_agent(prompt: str, goal: str, tools: List[dict], history: List[dict]) -> dict:
-    """Mock function for AI reasoning and observation."""
+    """(UPDATED) AI reasoning and observation using Gemini."""
     print(f"[Partner] AI Agent called with prompt: {prompt}")
+
+    # Note: The original code re-uses the 'goal' variable to pass the 'action_result'
+    # when the prompt is "Observe". We will handle this.
     
     if prompt == "Reason":
-        # Check if goal is already met based on history
-        if history and "success" in history[-1].get("observation", ""):
-            return {
-                "thought": "The last observation indicates success. The goal is complete.",
-                "action": "finish_goal",
-                "action_input": {}
-            }
+        prompt_parts = [
+            f"Prompt: {prompt}\n",
+            f"Current Step Goal: {goal}\n",
+            f"Available Tools: {json.dumps(tools)}\n",
+            # Send only the last 3 history steps to save tokens and stay relevant
+            f"Recent History: {json.dumps(history[-3:])}\n\n",
+            "Generate your JSON response (thought, action, action_input)."
+        ]
+        
+        response = generate_json(partner_model, prompt_parts)
+        
+        if "error" in response or "thought" not in response or "action" not in response:
+            print(f"[Partner] AI reasoning failed: {response.get('error', 'Invalid format')}")
+            # Fallback to stop the loop
+            return {"thought": "AI error, cannot proceed.", "action": "finish_goal", "action_input": {}}
+        
+        return response
 
-        # If not, pick a tool
-        tool_to_use = random.choice(tools)
-        return {
-            "thought": f"I need to achieve the goal: '{goal}'. I will use the tool '{tool_to_use['name']}'.",
-            "action": tool_to_use['name'],
-            "action_input": {"goal": goal, "params": "mock_params"}
-        }
-    
     if prompt == "Observe":
-        observation_text = f"The tool execution resulted in: {goal}"
-        return {
-            "observation": observation_text
-        }
+        action_result = goal # 'goal' param is used to pass the result
+        prompt_parts = [
+            f"Prompt: {prompt}\n",
+            f"Action Result: {json.dumps(action_result)}\n\n",
+            "Generate your JSON observation (observation)."
+        ]
+        response = generate_json(partner_model, prompt_parts)
+
+        if "error" in response or "observation" not in response:
+            print(f"[Partner] AI observation failed: {response.get('error', 'Invalid format')}")
+            return {"observation": f"AI failed to generate observation for: {action_result}"}
+        
+        return response
     
-    return {"output": "Mock AI response"}
+    return {"output": "Mock AI response"} # Fallback for unknown prompt
 # --- End Mock Agent Function ---
 
 

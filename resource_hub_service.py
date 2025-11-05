@@ -71,7 +71,7 @@ def discover(service_name: str) -> str:
 def log_to_overseer(task_id: str, level: str, message: str, context: dict = {}):
     """Sends a log entry to the Overseer service."""
     try:
-        overseer_url = discover("oversee-service") # Corrected: 'overseer-service'
+        overseer_url = discover("overseer-service") # Corrected: 'overseer-service'
         requests.post(f"{overseer_url}/log/event", json={
             "service": SERVICE_NAME,
             "task_id": task_id,

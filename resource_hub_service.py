@@ -5,20 +5,20 @@ import uvicorn
 import requests
 import threading
 import time
-from security import get_api_key # Import our new auth function
+from security import get_api_key
+from typing import List
 
 # --- Authentication & Service Constants ---
 app = FastAPI(
     title="Resource Hub Service",
     description="Provides tools, policies, and memory for SHIVA agents.",
-    dependencies=[Depends(get_api_key)] # Apply auth to all endpoints
+    dependencies=[Depends(get_api_key)]
 )
-
 API_KEY = "mysecretapikey"
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = "http://localhost:8005"
 SERVICE_NAME = "resource-hub-service"
-SERVICE_PORT = 8006 # New port
+SERVICE_PORT = 8006
 # --- End Authentication & Service Constants ---
 
 # --- Mock Database ---
@@ -35,10 +35,20 @@ MOCK_TOOLS = {
         {"name": "fetch_data", "description": "Fetches data from an API."}
     ]
 }
+
+# --- NEW: Short-Term Memory Database ---
+# Stores { "task_id": [ { "thought": "...", "action": "...", "observation": "..." } ] }
+tasks_memory = {}
 # --- End Mock Database ---
 
+# --- NEW: Pydantic Model for Memory ---
+class MemoryEntry(BaseModel):
+    thought: str
+    action: str
+    observation: str
+# ---
 
-# --- Service Discovery & Logging (Copied from Manager) ---
+# --- Service Discovery & Logging (No change) ---
 def discover(service_name: str) -> str:
     """Finds a service's URL from the Directory."""
     print(f"[ResourceHub] Discovering: {service_name}")
@@ -46,7 +56,7 @@ def discover(service_name: str) -> str:
         r = requests.get(
             f"{DIRECTORY_URL}/discover",
             params={"service_name": service_name},
-            headers=AUTH_HEADER # Auth
+            headers=AUTH_HEADER
         )
         if r.status_code != 200:
             print(f"[ResourceHub] FAILED to discover {service_name}.")
@@ -61,19 +71,19 @@ def discover(service_name: str) -> str:
 def log_to_overseer(task_id: str, level: str, message: str, context: dict = {}):
     """Sends a log entry to the Overseer service."""
     try:
-        overseer_url = discover("overseer-service")
+        overseer_url = discover("oversee-service") # Corrected: 'overseer-service'
         requests.post(f"{overseer_url}/log/event", json={
             "service": SERVICE_NAME,
             "task_id": task_id,
             "level": level,
             "message": message,
             "context": context
-        }, headers=AUTH_HEADER) # Auth
+        }, headers=AUTH_HEADER)
     except Exception as e:
         print(f"[ResourceHub] FAILED to log to Overseer: {e}")
 # --- End Service Discovery & Logging ---
 
-# --- Service Registration (Copied from Manager) ---
+# --- Service Registration (No change) ---
 def register_self():
     """Registers this service with the Directory."""
     service_url = f"http://localhost:{SERVICE_PORT}"
@@ -83,7 +93,7 @@ def register_self():
                 "service_name": SERVICE_NAME,
                 "service_url": service_url,
                 "ttl_seconds": 60
-            }, headers=AUTH_HEADER) # Auth
+            }, headers=AUTH_HEADER)
             if r.status_code == 200:
                 print(f"[ResourceHub] Successfully registered with Directory at {DIRECTORY_URL}")
                 threading.Thread(target=heartbeat, daemon=True).start()
@@ -104,7 +114,7 @@ def heartbeat():
                 "service_name": SERVICE_NAME,
                 "service_url": service_url,
                 "ttl_seconds": 60
-            }, headers=AUTH_HEADER) # Auth
+            }, headers=AUTH_HEADER)
             print("[ResourceHub] Heartbeat sent to Directory.")
         except requests.exceptions.ConnectionError:
             print("[ResourceHub] Failed to send heartbeat. Will retry registration.")
@@ -117,7 +127,7 @@ def on_startup():
 # --- End Service Registration ---
 
 
-# --- API Endpoints ---
+# --- API Endpoints (UPDATED) ---
 @app.get("/policy/list", status_code=200)
 def get_policies(context: str = "global"):
     """Fetch compliance policies."""
@@ -129,6 +139,54 @@ def get_tools():
     """Fetch available tools for agents."""
     log_to_overseer("N/A", "INFO", "Tool list requested.")
     return MOCK_TOOLS
+
+# --- NEW: Memory Endpoints (Point 2) ---
+
+@app.post("/memory/{task_id}", status_code=201)
+def add_memory(task_id: str, entry: MemoryEntry):
+    """Add a (Thought, Action, Observation) entry to short-term memory."""
+    if task_id not in tasks_memory:
+        tasks_memory[task_id] = []
+    
+    tasks_memory[task_id].append(entry.dict())
+    log_to_overseer(task_id, "INFO", f"Memory entry added for task {task_id}")
+    return {"status": "Memory added", "entries": len(tasks_memory[task_id])}
+
+@app.get("/memory/{task_id}", status_code=200, response_model=List[MemoryEntry])
+def get_memory(task_id: str):
+    """Retrieve the full short-term memory history for a task."""
+    if task_id not in tasks_memory:
+        log_to_overseer(task_id, "WARN", f"No memory found for task {task_id}")
+        return []
+    
+    log_to_overseer(task_id, "INFO", f"Memory retrieved for task {task_id}")
+    return tasks_memory[task_id]
+
+@app.get("/memory/query/{task_id}", status_code=200)
+def query_rag(task_id: str, query: str):
+    """(Mock RAG) Query the task's memory for insights."""
+    
+    memory_history = tasks_memory.get(task_id, [])
+    log_to_overseer(task_id, "INFO", f"RAG query received: {query}")
+    
+    # Mock RAG: A real implementation would use LangChain + ChromaDB
+    # This mock just looks for keywords in the memory
+    
+    if not memory_history:
+        return {"insight": "No memory to analyze, but I'll try my best."}
+
+    history_str = str(memory_history)
+    insight = f"Mock RAG insight based on {len(memory_history)} entries. "
+    if "error" in history_str.lower():
+        insight += "Analysis of memory shows a previous error was encountered."
+    elif "success" in history_str.lower():
+        insight += "Analysis of memory shows previous steps were successful."
+    else:
+        insight += "Memory seems nominal."
+        
+    return {"insight": insight}
+
+# --- End NEW Memory Endpoints ---
 
 if __name__ == "__main__":
     print(f"Starting Resource Hub Service on port {SERVICE_PORT}...")

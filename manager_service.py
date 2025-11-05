@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 import uvicorn
-import httpx  # Use httpx for async requests
+import httpx
 import threading
 import time
 import uuid
@@ -21,10 +21,22 @@ SERVICE_NAME = "manager-service"
 SERVICE_PORT = 8001
 # --- End Authentication & Service Constants ---
 
-# --- NEW: In-memory Task Database ---
-# This will store the state of all tasks
+# --- In-memory Task Database (UPDATED) ---
+# Now stores more state for pausing and replanning
 tasks_db = {}
+# tasks_db[task_id] = {
+#     "status": "PENDING",
+#     "goal": "...",
+#     "context": {...},
+#     "plan": {...},
+#     "current_step_index": 0,
+#     "reason": "..."
+# }
 # ---
+
+class InvokeRequest(BaseModel):
+    goal: str
+    context: dict = {}
 
 # --- Mock Agent Function (No change) ---
 def use_agent(prompt: str, input_data: dict) -> dict:
@@ -42,7 +54,7 @@ def use_agent(prompt: str, input_data: dict) -> dict:
     return {"output": "Mock AI response"}
 # --- End Mock Agent Function ---
 
-# --- Service Discovery & Logging (UPDATED to be async) ---
+# --- Service Discovery & Logging (No change) ---
 async def discover(client: httpx.AsyncClient, service_name: str) -> str:
     """Finds a service's URL from the Directory (async)."""
     print(f"[Manager] Discovering: {service_name}")
@@ -52,7 +64,7 @@ async def discover(client: httpx.AsyncClient, service_name: str) -> str:
             params={"service_name": service_name},
             headers=AUTH_HEADER
         )
-        r.raise_for_status() # Raise exception for 4xx/5xx
+        r.raise_for_status()
         url = r.json()["url"]
         print(f"[Manager] Discovered {service_name} at {url}")
         return url
@@ -62,7 +74,6 @@ async def discover(client: httpx.AsyncClient, service_name: str) -> str:
     except httpx.HTTPStatusError as e:
         print(f"[Manager] FAILED to discover {service_name}. Directory response: {e.response.text}")
         raise HTTPException(500, detail=f"Could not discover {service_name}: {e.response.text}")
-
 
 async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
     """Sends a log entry to the Overseer service (async)."""
@@ -79,11 +90,10 @@ async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, m
         print(f"[Manager] FAILED to log to Overseer: {e}")
 # --- End Service Discovery & Logging ---
 
-# --- Service Registration (Still synchronous, runs in separate thread) ---
+# --- Service Registration (No change) ---
 def register_self():
     while True:
         try:
-            # Use synchronous requests for initial registration
             r = httpx.post(f"{DIRECTORY_URL}/register", json={
                 "service_name": SERVICE_NAME,
                 "service_url": f"http://localhost:{SERVICE_PORT}",
@@ -120,42 +130,119 @@ def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
 # --- End Service Registration ---
 
-class InvokeRequest(BaseModel):
-    goal: str
-    context: dict = {}
 
-# --- NEW: Background Task Logic ---
+# --- NEW: Multi-Step Execution Logic (Point 4) ---
+async def execute_plan_from_step(task_id: str, step_index: int):
+    """
+    This function executes a plan step-by-step, starting from step_index.
+    It's designed to be resumable.
+    """
+    task = tasks_db.get(task_id)
+    if not task:
+        print(f"[Manager] Task {task_id} not found for execution.")
+        return
+
+    plan = task.get("plan")
+    if not plan or not plan.get("steps"):
+        print(f"[Manager] No plan for task {task_id}.")
+        return
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            for i in range(step_index, len(plan["steps"])):
+                task["current_step_index"] = i
+                step = plan["steps"][i]
+                
+                task["status"] = f"EXECUTING_STEP_{i+1}: {step['goal']}"
+                await log_to_overseer(client, task_id, "INFO", f"Executing step {i+1}: {step['goal']}")
+
+                # Call Partner to execute the *goal* (full ReAct loop)
+                partner_url = await discover(client, "partner-service")
+                p_resp = await client.post(f"{partner_url}/partner/execute_goal", json={
+                    "task_id": task_id,
+                    "current_step_goal": step["goal"],
+                    "approved_plan": plan,
+                    "context": task.get("context", {})
+                }, headers=AUTH_HEADER) # UPDATED: /execute_goal
+                
+                partner_result = p_resp.json()
+                await log_to_overseer(client, task_id, "INFO", f"Partner result: {partner_result.get('status')}", partner_result)
+
+                # Handle Partner's response
+                partner_status = partner_result.get("status")
+
+                if partner_status == "STEP_COMPLETED":
+                    # Good, continue to the next step in the loop
+                    continue
+                
+                elif partner_status == "DEVIATION_DETECTED":
+                    await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task for manual review.")
+                    task["status"] = "PAUSED_DEVIATION"
+                    task["reason"] = partner_result.get("reason")
+                    return # Stop execution
+                
+                elif partner_status == "ACTION_REJECTED":
+                    await log_to_overseer(client, task_id, "ERROR", "Task REJECTED: Guardian denied a critical step.")
+                    task["status"] = "REJECTED"
+                    task["reason"] = partner_result.get("reason")
+                    return # Stop execution
+                
+                else: # FAILED or other
+                    await log_to_overseer(client, task_id, "ERROR", "Task FAILED during partner execution.")
+                    task["status"] = "FAILED"
+                    task["reason"] = partner_result.get("reason", "Unknown partner failure")
+                    return # Stop execution
+
+            # If the loop completes without returning, the task is done
+            await log_to_overseer(client, task_id, "INFO", "All steps completed. Task finished.")
+            task["status"] = "COMPLETED"
+            task["result"] = "All plan steps executed successfully."
+
+        except Exception as e:
+            print(f"[Manager] Unhandled exception in execute_plan {task_id}: {e}")
+            try:
+                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
+            except: pass
+            task["status"] = "FAILED"
+            task["reason"] = str(e)
+# --- END: Multi-Step Execution Logic ---
+
+
+# --- Background Task Entry Point (UPDATED) ---
 async def run_task_background(task_id: str, request: InvokeRequest):
-    """This is the main logic that runs in the background."""
+    """
+    This is the main entry point for a task.
+    It generates the plan, validates it, and then hands off to execute_plan_from_step.
+    """
+    task = tasks_db[task_id]
+    task["status"] = "STARTING"
     
-    tasks_db[task_id]["status"] = "STARTING"
-    
-    # Use an async client for all operations in this task
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             await log_to_overseer(client, task_id, "INFO", f"Task started: {request.goal}")
             
             # Check Overseer status first
-            tasks_db[task_id]["status"] = "CHECKING_HALT"
+            task["status"] = "CHECKING_HALT"
             overseer_url = await discover(client, "overseer-service")
             status_resp = await client.get(f"{overseer_url}/control/status", headers=AUTH_HEADER)
             
             if status_resp.json().get("status") == "HALT":
                 await log_to_overseer(client, task_id, "ERROR", "Task rejected: System is in HALT state.")
-                tasks_db[task_id]["status"] = "REJECTED"
-                tasks_db[task_id]["reason"] = "System is in HALT state"
+                task["status"] = "REJECTED"
+                task["reason"] = "System is in HALT state"
                 return
 
             # 1. Generate plan
-            tasks_db[task_id]["status"] = "PLANNING"
+            task["status"] = "PLANNING"
             await log_to_overseer(client, task_id, "INFO", "Generating execution plan...")
             plan_input = {"change_id": task_id, "goal": request.goal, "context": request.context}
             plan = use_agent("Create high-level plan for user goal", plan_input)
-            tasks_db[task_id]["plan"] = plan
+            task["plan"] = plan
+            task["current_step_index"] = 0
             await log_to_overseer(client, task_id, "INFO", f"Plan generated with {len(plan.get('steps', []))} steps.", plan)
             
             # 2. Validate plan with Guardian
-            tasks_db[task_id]["status"] = "VALIDATING_PLAN"
+            task["status"] = "VALIDATING_PLAN"
             await log_to_overseer(client, task_id, "INFO", "Validating plan with Guardian...")
             guardian_url = await discover(client, "guardian-service")
             g_resp = await client.post(f"{guardian_url}/guardian/validate_plan", json={
@@ -165,62 +252,33 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             if g_resp.status_code != 200 or g_resp.json()["decision"] != "Allow":
                 reason = g_resp.json().get("reason", "Unknown reason")
                 await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", g_resp.json())
-                tasks_db[task_id]["status"] = "REJECTED"
-                tasks_db[task_id]["reason"] = f"Plan validation failed: {reason}"
+                task["status"] = "REJECTED"
+                task["reason"] = f"Plan validation failed: {reason}"
                 return
             
             await log_to_overseer(client, task_id, "INFO", "Plan validation PASSED.")
             
-            # 3. Execute plan with Partner
+            # 3. Execute plan (from step 0)
             if not plan.get("steps"):
                 await log_to_overseer(client, task_id, "WARN", "Plan has no steps. Task considered complete.")
-                tasks_db[task_id]["status"] = "COMPLETED"
-                tasks_db[task_id]["result"] = "No steps to execute."
+                task["status"] = "COMPLETED"
+                task["result"] = "No steps to execute."
                 return
                 
-            first_step = plan["steps"][0]
-            tasks_db[task_id]["status"] = f"EXECUTING_STEP_1: {first_step['goal']}"
-            await log_to_overseer(client, task_id, "INFO", f"Executing first step: {first_step['goal']}")
-            
-            partner_url = await discover(client, "partner-service")
-            p_resp = await client.post(f"{partner_url}/partner/execute_step", json={
-                "task_id": task_id,
-                "current_step_goal": first_step["goal"],
-                "approved_plan": plan,
-                "context": request.context
-            }, headers=AUTH_HEADER)
-            
-            partner_result = p_resp.json()
-            await log_to_overseer(client, task_id, "INFO", f"Partner execution result: {partner_result.get('status')}", partner_result)
-            
-            # 4. Handle result
-            if partner_result.get("status") == "DEVIATION_DETECTED":
-                await log_to_overseer(client, task_id, "WARN", "Deviation detected. Stopping task for manual review.")
-                tasks_db[task_id]["status"] = "PAUSED_DEVIATION"
-                tasks_db[task_id]["details"] = partner_result
-            elif partner_result.get("status") == "ACTION_REJECTED":
-                await log_to_overseer(client, task_id, "ERROR", "Task REJECTED: Guardian denied a critical step.")
-                tasks_db[task_id]["status"] = "REJECTED"
-                tasks_db[task_id]["details"] = partner_result
-            else:
-                await log_to_overseer(client, task_id, "INFO", "Task completed (mock: only first step).")
-                tasks_db[task_id]["status"] = "COMPLETED"
-                tasks_db[task_id]["result"] = partner_result
+            # Hand off to the resumable executor
+            await execute_plan_from_step(task_id, 0)
 
         except Exception as e:
-            # Catch-all for any unhandled exception during the background task
+            # Catch-all for any unhandled exception during planning/validation
             print(f"[Manager] Unhandled exception in background task {task_id}: {e}")
             try:
-                # Try to log the failure
                 await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
-            except:
-                pass # Logging itself might fail
-            tasks_db[task_id]["status"] = "FAILED"
-            tasks_db[task_id]["reason"] = str(e)
-# --- END: Background Task Logic ---
+            except: pass
+            task["status"] = "FAILED"
+            task["reason"] = str(e)
+# --- END: Background Task Entry Point ---
 
 
-# UPDATED: /invoke is now async and returns 202
 @app.post("/invoke", status_code=202)
 async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
     """Start a new high-level task in the background."""
@@ -228,12 +286,16 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
     print(f"\n[Manager] === New Task Received ===\nTask ID: {task_id}\nGoal: {request.goal}\n")
     
     # Create initial task entry in DB
-    tasks_db[task_id] = {"status": "PENDING", "goal": request.goal}
+    tasks_db[task_id] = {
+        "status": "PENDING", 
+        "goal": request.goal, 
+        "context": request.context,
+        "current_step_index": 0
+    }
     
     # Add the long-running job to the background
     background_tasks.add_task(run_task_background, task_id, request)
     
-    # Immediately return 202 Accepted
     return {
         "task_id": task_id, 
         "status": "PENDING", 
@@ -241,7 +303,6 @@ async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
         "status_url": f"/task/{task_id}/status"
     }
 
-# NEW: Endpoint to check task status
 @app.get("/task/{task_id}/status", status_code=200)
 def get_task_status(task_id: str):
     """Check the status of a background task."""
@@ -250,16 +311,61 @@ def get_task_status(task_id: str):
         raise HTTPException(404, detail="Task not found")
     return task
 
-# Stub endpoints (no change)
-@app.post("/task/{task_id}/approve")
-def approve_task(task_id: str):
-    # This logic would need to be updated to interact with the tasks_db
-    return {"task_id": task_id, "status": "Resuming (Not Implemented)"}
+# --- UPDATED: Endpoints for Approval and Replanning (Point 4) ---
 
-@app.post("/task/{task_id}/replan")
-def replan_task(task_id: str):
-    # This logic would need to be updated to trigger a new background task
-    return {"task_id": task_id, "status": "Replanning (Not Implemented)"}
+@app.post("/task/{task_id}/approve", status_code=202)
+async def approve_task(task_id: str, background_tasks: BackgroundTasks):
+    """Approve a paused task to resume execution."""
+    task = tasks_db.get(task_id)
+    if not task:
+        raise HTTPException(404, detail="Task not found")
+        
+    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED"]:
+        raise HTTPException(400, detail=f"Task is not in a pausable state. Current status: {task['status']}")
+
+    step_to_resume = task.get("current_step_index", 0)
+    
+    print(f"[Manager] Resuming task {task_id} from step {step_to_resume + 1}")
+    
+    # Set status and add the *resumable* function to background
+    task["status"] = "RESUMING"
+    task["reason"] = "Resumed by user approval."
+    
+    background_tasks.add_task(execute_plan_from_step, task_id, step_to_resume)
+    
+    return {
+        "task_id": task_id, 
+        "status": "RESUMING",
+        "details": f"Task resuming execution from step {step_to_resume + 1}."
+    }
+
+@app.post("/task/{task_id}/replan", status_code=202)
+async def replan_task(task_id: str, request: InvokeRequest, background_tasks: BackgroundTasks):
+    """Trigger a full replan of a task, optionally with a new goal/context."""
+    task = tasks_db.get(task_id)
+    if not task:
+        raise HTTPException(404, detail="Task not found")
+
+    print(f"[Manager] Replanning task {task_id} with new goal: {request.goal}")
+
+    # Update the task's core goal and context
+    task["status"] = "REPLANNING"
+    task["goal"] = request.goal
+    task["context"] = request.context
+    task["plan"] = {} # Clear the old plan
+    task["current_step_index"] = 0
+    task["reason"] = "Replanning triggered by user."
+    
+    # Add the *original* entry point function to background
+    # This will generate a new plan, validate it, and execute it
+    background_tasks.add_task(run_task_background, task_id, request)
+
+    return {
+        "task_id": task_id, 
+        "status": "REPLANNING",
+        "details": "Task replanning initiated with new goal."
+    }
+# --- End UPDATED Endpoints ---
 
 
 if __name__ == "__main__":

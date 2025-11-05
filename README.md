@@ -30,6 +30,9 @@ cd YI_Hackathon
 python -m venv venv
 source venv/bin/activate   # On Windows: venv\Scripts\activate
 
+# Add gemini key to .env
+GOOGLE_API_KEY= ,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,.,
+
 # Install dependencies
 pip install -r requirements.txt
 ```

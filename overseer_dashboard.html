@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overseer Live Logs</title>
+    <style>
+        body { font-family: monospace; background-color: #111; color: #eee; }
+        h1 { color: #0f0; }
+        #logs { width: 95%; height: 500px; overflow-y: scroll; border: 1px solid #555; background-color: #222; padding: 10px; }
+        pre { margin: 5px 0; white-space: pre-wrap; word-wrap: break-word; }
+        .INFO { color: #0f0; }
+        .WARN { color: #ff0; }
+        .ERROR { color: #f00; }
+    </style>
+</head>
+<body>
+    <h1>🛰️ Overseer - Live Log Stream</h1>
+    <div id="logs">
+        <pre id="status">Connecting to WebSocket...</pre>
+    </div>
+
+    <script>
+        const logsContainer = document.getElementById("logs");
+        const statusElement = document.getElementById("status");
+        const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
+
+        ws.onopen = () => {
+            console.log("WebSocket Connected");
+            statusElement.textContent = "Connected. Waiting for logs...";
+            statusElement.className = "INFO";
+        };
+
+        ws.onmessage = (event) => {
+            // Clear the "waiting" message on first log
+            if (statusElement) {
+                statusElement.remove();
+            }
+
+            const logData = JSON.parse(event.data);
+            const logElement = document.createElement("pre");
+            
+            // Add a class for color-coding
+            logElement.className = logData.level;
+
+            // Format the log message
+            logElement.textContent = `[${logData.service}][${logData.task_id}][${logData.level}] ${logData.message}`;
+            
+            logsContainer.appendChild(logElement);
+
+            // Auto-scroll to bottom
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket Disconnected");
+            const errorElement = document.createElement("pre");
+            errorElement.className = "ERROR";
+            errorElement.textContent = "WebSocket disconnected. Please refresh the page.";
+            logsContainer.appendChild(errorElement);
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket Error:", error);
+            const errorElement = document.createElement("pre");
+            errorElement.className = "ERROR";
+            errorElement.textContent = "WebSocket connection error.";
+            logsContainer.appendChild(errorElement);
+        };
+    </script>
+</body>
+</html>

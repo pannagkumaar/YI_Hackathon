@@ -155,6 +155,7 @@ if __name__ == "__main__":
     
     if test_discovery():
         test_invoke()
+        
         test_kill_switch()
         
     print("\n" + "="*50)

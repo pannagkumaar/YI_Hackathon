@@ -45,10 +45,12 @@ You must start all **five** services in **separate terminal windows**.
 The **Directory Service** must be started **first**, so the others can register with it.
 
 ---
+
 ###  Alternatively can run the start_services.py instead of the below steps
 ```bash
 python start_services.py
 ```
+---
 ### 🧱 Terminal 1: Directory Service — "The Phone Book"
 
 ```bash

@@ -9,6 +9,7 @@ This component has the most significant pending items.
 - **Requirement**: The hub must "Implement secure sandboxed execution". This is the "Armory" part of its mission.
 - **Current Status**: This is not implemented. The `resource_hub_service.py` file has an endpoint to list tools (`/tools/list`) but no endpoint to actually execute a tool.
 - **Impact**: Because this is missing, the "Partner" service simulates its "Act" step with `action_result = random.choice(["success", "deviation", ...])`. This is the biggest functional gap in the system.
+-  **Another One**: The Guardian's main weakness is that its "brain" (the policies) is static and mocked in the `resource_hub_service.py` file. By adding endpoints to manage policies, your Guardian becomes instantly more powerful.
 
 #### Pending: Real RAG (Retrieval-Augmented Generation)
 

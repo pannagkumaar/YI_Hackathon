@@ -264,27 +264,45 @@ async def execute_goal(data: ExecuteGoal):
                 await log_to_overseer(client, task_id, "ERROR", f"Failed to validate action with Guardian: {e}")
                 return {"task_id": task_id, "status": "FAILED", "reason": "Failed to contact Guardian"}
 
-            # 3. Act (Simulated)
+            # 3. Act (Simulated) --- !!! THIS SECTION IS UPDATED !!! ---
             await log_to_overseer(client, task_id, "INFO", f"Taking action: {action} with input {action_input}")
-            action_result = random.choice(["success", "deviation", "success", "success"])
             
+            # Instead of just a string, create descriptive results
+            simulated_results = [
+                {"status": "success", "output": "Script executed, exit code 0."},
+                {"status": "deviation", "error": f"Tool {action} failed: Connection timed out to host."},
+                {"status": "success", "output": "Data fetched, 100 rows received."},
+                {"status": "deviation", "error": f"Tool {action} failed: File not found '/tmp/data.csv'"}
+            ]
+            # Choose a random result
+            random_result = random.choice(simulated_results)
+            action_status = random_result["status"] # This is "success" or "deviation"
+            
+            # This is the 'action_result' payload that gets passed to the observation model
+            # It's now a useful dictionary, not just a string.
+            action_result_payload = random_result 
+            # --- END UPDATED SIMULATION ---
+
             # 4. Observe
-            observation = use_agent("Observe", action_result, tools, history)
+            # Pass the rich dictionary (not just a string) to the observation model
+            observation = use_agent("Observe", action_result_payload, tools, history)
             observation_text = observation.get('observation', 'No observation.')
             await log_to_overseer(client, task_id, "INFO", f"Observation: {observation_text}", observation)
             
-            # 5. Log to Memory (Point 3)
+            # 5. Log to Memory
             history.append({"thought": thought, "action": action, "observation": observation_text})
             await log_memory_to_hub(client, task_id, thought, action, observation_text)
             
             # 6. Handle Deviation
-            if action_result == "deviation":
+            # Check the status from our new simulation
+            if action_status == "deviation":
                 await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task.")
                 return {
                     "task_id": task_id, 
                     "status": "DEVIATION_DETECTED", 
                     "reason": "Unexpected deviation during tool execution",
-                    "details": observation
+                    # 'observation' is the AI summary of the *detailed* error
+                    "details": observation 
                 }
 
         # If loop finishes without completion

@@ -145,7 +145,7 @@ def heartbeat():
 def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
 
-# --- Multi-Step Execution Logic (No change) ---
+# --- Multi-Step Execution Logic (!!! UPDATED !!!) ---
 async def execute_plan_from_step(task_id: str, step_index: int):
     task = tasks_db.get(task_id)
     if not task:
@@ -186,18 +186,24 @@ async def execute_plan_from_step(task_id: str, step_index: int):
                     await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task for manual review.")
                     task["status"] = "PAUSED_DEVIATION"
                     task["reason"] = partner_result.get("reason")
+                    # Save the detailed observation from the partner for the UI
+                    task["deviation_details"] = partner_result.get("details", {"observation": "No details provided."}) 
                     return
                 
                 elif partner_status == "ACTION_REJECTED":
                     await log_to_overseer(client, task_id, "ERROR", "Task REJECTED: Guardian denied a critical step.")
                     task["status"] = "REJECTED"
                     task["reason"] = partner_result.get("reason")
+                    # Save context for the UI
+                    task["deviation_details"] = {"observation": f"Guardian rejection: {task['reason']}"}
                     return
                 
                 else:
                     await log_to_overseer(client, task_id, "ERROR", "Task FAILED during partner execution.")
                     task["status"] = "FAILED"
                     task["reason"] = partner_result.get("reason", "Unknown partner failure")
+                    # Save context for the UI
+                    task["deviation_details"] = {"observation": f"Partner failed: {task['reason']}"}
                     return
 
             await log_to_overseer(client, task_id, "INFO", "All steps completed. Task finished.")
@@ -211,6 +217,9 @@ async def execute_plan_from_step(task_id: str, step_index: int):
             except: pass
             task["status"] = "FAILED"
             task["reason"] = str(e)
+            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
+# --- END UPDATED SECTION ---
+
 
 # --- Background Task Entry Point (No change) ---
 async def run_task_background(task_id: str, request: InvokeRequest):
@@ -229,6 +238,7 @@ async def run_task_background(task_id: str, request: InvokeRequest):
                 await log_to_overseer(client, task_id, "ERROR", "Task rejected: System is in HALT state.")
                 task["status"] = "REJECTED"
                 task["reason"] = "System is in HALT state"
+                task["deviation_details"] = {"observation": "Task rejected: System is in HALT state"}
                 return
 
             task["status"] = "PLANNING"
@@ -251,6 +261,7 @@ async def run_task_background(task_id: str, request: InvokeRequest):
                 await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", g_resp.json())
                 task["status"] = "REJECTED"
                 task["reason"] = f"Plan validation failed: {reason}"
+                task["deviation_details"] = {"observation": f"Plan validation failed: {reason}"}
                 return
             
             await log_to_overseer(client, task_id, "INFO", "Plan validation PASSED.")
@@ -270,6 +281,7 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             except: pass
             task["status"] = "FAILED"
             task["reason"] = str(e)
+            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
 
 # --- Public API Endpoints ---
 
@@ -308,7 +320,7 @@ async def approve_task(task_id: str, background_tasks: BackgroundTasks):
     if not task:
         raise HTTPException(404, detail="Task not found")
         
-    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED", "REJECTED"]:
+    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED", "REJECTED", "FAILED"]:
         raise HTTPException(400, detail=f"Task is not in a pausable/resumable state. Current status: {task['status']}")
 
     step_to_resume = task.get("current_step_index", 0)

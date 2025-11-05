@@ -107,7 +107,7 @@ def on_startup():
 # NEW: Serve the HTML Dashboard (No dependency)
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard():
-    with open("overseer_dashboard.html", "r") as f:
+    with open("overseer_dashboard.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 # NEW: WebSocket endpoint (No dependency)

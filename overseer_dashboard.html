@@ -77,7 +77,7 @@
         .log-entry.ERROR { background-color: rgba(220, 53, 69, 0.05); border-left: 3px solid #dc3545; }
         .log-entry.WARN { background-color: rgba(255, 193, 7, 0.05); border-left: 3px solid #ffc107; }
 
-        /* NEW: Service Colors for Distinguishability */
+        /* Service Colors for Distinguishability */
         .service-manager-service { color: #00b8d4; } /* Cyan */
         .service-partner-service { color: #00e676; } /* Green */
         .service-guardian-service { color: #ffab00; } /* Amber */
@@ -135,9 +135,31 @@
         .FAILED { color: #dc3545; } /* Red */
         .COMPLETED { color: #28a745; } /* Darker Green */
 
-        /* Buttons */
+        /* --- UPDATED: Make the context box pop --- */
+        .deviation-details {
+            background-color: #fffbe6; /* Light cream/yellow */
+            color: #5d4037; /* Dark brown/grey text for readability */
+            padding: 10px 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap; /* Show newlines */
+            word-break: break-all;
+            margin-top: 12px;
+            border: 1px solid #ffecb3; /* Lighter border */
+            border-left: 5px solid #ffab00; /* Main amber accent */
+        }
+        
+        /* --- NEW: Class for the reason text --- */
+        .task-reason {
+            color: #ffc107; /* Amber */
+            font-weight: 600; /* Bolder */
+            margin-top: 8px !important;
+        }
+
+        /* --- UPDATED BUTTON LOGIC --- */
+        
+        /* Base button style (no background) */
         button {
-            background-color: #28a745; /* Green */
             color: #fff;
             border: none;
             padding: 8px 14px;
@@ -153,9 +175,30 @@
             opacity: 0.85;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
+
+        /* Specific button classes */
+        button.approve-go {
+            background-color: #28a745; /* Green */
+            color: #fff;
+        }
+        button.approve-go:hover {
+            background-color: #218838;
+        }
+
+        button.approve-warn {
+            background-color: #00b8d4; /* Cyan (matches status) */
+            color: #fff;
+        }
+        button.approve-warn:hover {
+            background-color: #0097a7;
+        }
+
         button.replan {
             background-color: #ffc107; /* Yellow */
-            color: #212529;
+            color: #212529; /* Dark text for yellow button */
+        }
+        button.replan:hover {
+            background-color: #ffb300;
         }
     </style>
 </head>
@@ -180,7 +223,7 @@
         const statusElement = document.getElementById("status");
         const tasksContainer = document.getElementById("tasks");
 
-        // --- 1. Log WebSocket (UPDATED) ---
+        // --- 1. Log WebSocket ---
         const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
         ws.onopen = () => {
             statusElement.textContent = "Connected. Waiting for logs...";
@@ -198,19 +241,15 @@
             const logElement = document.createElement("div");
             logElement.className = "log-entry";
             if (logData.level) {
-                logElement.classList.add(logData.level); // Add level class (e.g., "ERROR") to the whole div
+                logElement.classList.add(logData.level);
             }
 
-            // Client-side timestamp
             const time = new Date().toLocaleTimeString();
-            
-            // Create spans for each part
             const timeSpan = document.createElement("span");
             timeSpan.className = "log-time";
             timeSpan.textContent = time;
 
             const serviceSpan = document.createElement("span");
-            // Add service-specific class for color-coding
             serviceSpan.className = `log-service service-${logData.service || 'unknown'}`;
             serviceSpan.textContent = `[${logData.service || 'N/A'}]`;
 
@@ -226,12 +265,8 @@
             msgSpan.className = "log-message";
             msgSpan.textContent = logData.message;
 
-            // Append all parts to the log entry
             logElement.append(timeSpan, serviceSpan, taskSpan, levelSpan, msgSpan);
-            
             logsContainer.appendChild(logElement);
-            
-            // Auto-scroll to bottom
             logsContainer.scrollTop = logsContainer.scrollHeight;
         };
         
@@ -267,7 +302,7 @@
                     return;
                 }
 
-                // Sort tasks: Paused/Failed first, then newest
+                // Sort tasks: Paused/Failed first
                 tasks.sort((a, b) => {
                     const statusA = a.status.toUpperCase();
                     const statusB = b.status.toUpperCase();
@@ -276,10 +311,7 @@
 
                     if (isPausedA && !isPausedB) return -1;
                     if (!isPausedA && isPausedB) return 1;
-                    
-                    // In a real app, sort by date (newest first)
-                    // Assuming newer tasks are at the end
-                    return 1; 
+                    return 0;
                 });
 
                 tasks.forEach(task => {
@@ -291,6 +323,7 @@
             }
         }
 
+        // --- 3. createTaskCard (!!! UPDATED !!!) ---
         function createTaskCard(task) {
             const card = document.createElement("div");
             card.className = "task-card";
@@ -298,29 +331,54 @@
             const statusClass = task.status.startsWith("EXECUTING_STEP") ? "EXECUTING_STEP" : task.status;
             
             let buttons = "";
+            // Check if task is in a state that allows user action
             if (task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED" || task.status === "FAILED") {
+                
+                let approveClass = "approve-go"; // Default to green
+                let approveText = "Approve/Resume";
+                
+                // If task FAILED or was REJECTED, button is blue and says "Retry"
+                if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
+                    approveClass = "approve-warn"; // New blue class
+                    approveText = "Retry/Resume";  // New text
+                }
+
                 buttons = `
                     <p>
-                        <button onclick="approveTask('${task.task_id}')">Approve/Resume</button>
+                        <button class="${approveClass}" onclick="approveTask('${task.task_id}')">${approveText}</button>
                         <button class="replan" onclick="replanTask('${task.task_id}')">Replan Task</button>
                     </p>
                 `;
             }
 
-            // Highlight reason if it exists
-            const reasonHtml = task.reason ? `<p style="color: #ffc107;">Reason: ${task.reason}</p>` : "";
+            // Use the new .task-reason class for the reason
+            const reasonHtml = task.reason ? `<p class="task-reason">Reason: ${task.reason}</p>` : "";
+
+            // Check for and render the detailed observation
+            const details = task.deviation_details;
+            let detailsHtml = "";
+            if (details && details.observation) {
+                // Escape HTML to prevent XSS
+                const safeObservation = document.createElement("div");
+                safeObservation.innerText = details.observation;
+                detailsHtml = `<pre class="deviation-details">Context: ${safeObservation.innerHTML}</pre>`;
+            
+            } else if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
+                 // Show box even if no details, to be consistent
+                 detailsHtml = `<pre class="deviation-details">Context: No specific details provided.</pre>`;
+            }
 
             card.innerHTML = `
                 <h3>${task.goal}</h3>
                 <p class="task-id">${task.task_id}</p>
                 <p>Status: <span class="task-status ${statusClass}">${task.status}</span></p>
                 ${reasonHtml}
-                ${buttons}
+                ${detailsHtml} ${buttons}
             `;
             return card;
         }
 
-        // --- 3. UI Action Handlers ---
+        // --- 4. UI Action Handlers ---
         async function approveTask(taskId) {
             console.log(`Approving ${taskId}...`);
             await fetch(`/ui/approve_task/${taskId}`, { method: "POST" });

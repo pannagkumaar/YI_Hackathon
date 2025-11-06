@@ -21,14 +21,17 @@ SERVICE_NAME = "resource-hub-service"
 SERVICE_PORT = 8006
 # --- End Authentication & Service Constants ---
 
-# --- Mock Database ---
-MOCK_POLICIES = {
+# --- MODIFIED: Mock Database ---
+# MOCK_POLICIES is now POLICY_DB to show it's dynamic
+POLICY_DB = {
     "global": [
         "Disallow: delete",
         "Disallow: shutdown",
         "Disallow: rm -rf"
     ]
 }
+# --- END MODIFICATION ---
+
 MOCK_TOOLS = {
     "tools": [
         {"name": "run_script", "description": "Executes a python script."},
@@ -36,16 +39,22 @@ MOCK_TOOLS = {
     ]
 }
 
-# --- NEW: Short-Term Memory Database ---
+# --- Short-Term Memory Database ---
 # Stores { "task_id": [ { "thought": "...", "action": "...", "observation": "..." } ] }
 tasks_memory = {}
 # --- End Mock Database ---
 
-# --- NEW: Pydantic Model for Memory ---
+# --- Pydantic Model for Memory ---
 class MemoryEntry(BaseModel):
     thought: str
     action: str
     observation: str
+# ---
+
+# --- NEW: Pydantic Model for Policy ---
+class PolicyEntry(BaseModel):
+    context: str = "global"
+    policy_rule: str # e.g., "Disallow: curl"
 # ---
 
 # --- Service Discovery & Logging (No change) ---
@@ -128,11 +137,47 @@ def on_startup():
 
 
 # --- API Endpoints (UPDATED) ---
+
+# --- MODIFIED: Policy Endpoints ---
 @app.get("/policy/list", status_code=200)
 def get_policies(context: str = "global"):
     """Fetch compliance policies."""
     log_to_overseer("N/A", "INFO", f"Policy list requested for context: {context}")
-    return {"policies": MOCK_POLICIES.get(context, [])}
+    # Read from the dynamic DB instead of the static MOCK
+    return {"policies": POLICY_DB.get(context, [])}
+
+@app.post("/policy/add", status_code=201)
+def add_policy(entry: PolicyEntry):
+    """Add a new policy rule to a context."""
+    context = entry.context
+    rule = entry.policy_rule
+    
+    if context not in POLICY_DB:
+        POLICY_DB[context] = []
+        
+    if rule not in POLICY_DB[context]:
+        POLICY_DB[context].append(rule)
+        log_to_overseer("N/A", "INFO", f"Policy added to '{context}': {rule}")
+        return {"status": "Policy added", "context": context, "rule": rule}
+    
+    log_to_overseer("N/A", "WARN", f"Policy already exists in '{context}': {rule}")
+    return {"status": "Policy already exists", "context": context, "rule": rule}
+
+@app.post("/policy/delete", status_code=200)
+def delete_policy(entry: PolicyEntry):
+    """Remove a policy rule from a context."""
+    context = entry.context
+    rule = entry.policy_rule
+    
+    if context in POLICY_DB and rule in POLICY_DB[context]:
+        POLICY_DB[context].remove(rule)
+        log_to_overseer("N/A", "INFO", f"Policy removed from '{context}': {rule}")
+        return {"status": "Policy removed", "context": context, "rule": rule}
+
+    log_to_overseer("N/A", "WARN", f"Policy not found in '{context}': {rule}")
+    raise HTTPException(404, detail="Policy not found")
+# --- END MODIFICATION ---
+
 
 @app.get("/tools/list", status_code=200)
 def get_tools():
@@ -140,7 +185,7 @@ def get_tools():
     log_to_overseer("N/A", "INFO", "Tool list requested.")
     return MOCK_TOOLS
 
-# --- NEW: Memory Endpoints (Point 2) ---
+# --- Memory Endpoints (No change) ---
 
 @app.post("/memory/{task_id}", status_code=201)
 def add_memory(task_id: str, entry: MemoryEntry):

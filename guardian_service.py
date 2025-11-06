@@ -8,10 +8,16 @@ import time
 from security import get_api_key # Import our new auth function
 from gemini_client import get_model, generate_json
 import json
+from typing import List # Import List
 
+# --- MODIFIED: System Prompt ---
 GUARDIAN_SYSTEM_PROMPT = """
 You are the "Guardian," a compliance and safety assistant for the SHIVA agent system.
 Your sole purpose is to evaluate a "proposed_action" or "plan" against a set of "policies."
+You will also be given "Task Memory" (a history of recent T-A-O).
+
+Use this memory to inform your decision. For example, if an action failed 
+or was denied recently, you should be more cautious about allowing a similar action.
 
 You must respond ONLY with a JSON object with two keys:
 1. "decision": Must be either "Allow" or "Deny".
@@ -21,6 +27,7 @@ Evaluate strictly. If a policy is "Disallow: <keyword>" and the <keyword> is in 
 proposed_action, you must "Deny" it. Also deny any plan with > 10 steps 
 as "excessively complex".
 """
+# --- END MODIFICATION ---
 guardian_model = get_model(system_instruction=GUARDIAN_SYSTEM_PROMPT)
 # --- Authentication & Service Constants ---
 app = FastAPI(
@@ -37,8 +44,8 @@ SERVICE_PORT = 8003
 # --- End Authentication & Service Constants ---
 
 
-# --- Mock Agent Function (UPDATED) ---
-def use_agent(prompt: str, input_data: dict, policies: list) -> dict:
+# --- MODIFIED: Mock Agent Function ---
+def use_agent(prompt: str, input_data: dict, policies: list, memory: list) -> dict:
     """(UPDATED) AI-based validation logic using Gemini."""
     print(f"[Guardian] AI Agent called with prompt: {prompt}")
 
@@ -46,6 +53,7 @@ def use_agent(prompt: str, input_data: dict, policies: list) -> dict:
     prompt_parts = [
         f"User Prompt: {prompt}\n",
         f"Policies: {json.dumps(policies)}\n",
+        f"Task Memory (Recent): {json.dumps(memory[-5:])}\n", # Pass only recent memory
         f"Input Data: {json.dumps(input_data)}\n\n",
         "Evaluate the input and return your JSON decision (decision, reason)."
     ]
@@ -59,7 +67,7 @@ def use_agent(prompt: str, input_data: dict, policies: list) -> dict:
         return {"decision": "Deny", "reason": f"AI model error: {validation.get('error', 'Invalid format')}"}
 
     return validation
-# --- End Mock Agent Function ---
+# --- END MODIFICATION ---
 
 
 # --- Service Discovery & Logging (Copied from Manager, with Auth) ---
@@ -167,20 +175,40 @@ def get_policies_from_hub(task_id: str) -> list:
     return [] # Default to empty list on failure
 # --- End Utility Function ---
 
+# --- NEW: Utility Function to Fetch Memory ---
+def get_memory_from_hub(task_id: str) -> list:
+    """Fetches the latest task memory from the Resource Hub."""
+    try:
+        hub_url = discover("resource-hub-service")
+        resp = requests.get(f"{hub_url}/memory/{task_id}", headers=AUTH_HEADER)
+        if resp.status_code == 200:
+            memory = resp.json() # This returns a List[MemoryEntry]
+            log_to_overseer(task_id, "INFO", f"Fetched {len(memory)} memory entries from Resource Hub.")
+            return memory
+        log_to_overseer(task_id, "WARN", f"Failed to fetch memory from Resource Hub: {resp.text}")
+    except Exception as e:
+        log_to_overseer(task_id, "ERROR", f"Error fetching memory: {e}")
+    return [] # Default to empty list on failure
+# --- END NEW Utility Function ---
 
+
+# --- MODIFIED: validate_action ---
 @app.post("/guardian/validate_action", status_code=200)
 def validate_action(data: ValidateAction):
     """Validate a single proposed action before execution."""
     log_to_overseer(data.task_id, "INFO", f"Validating action: {data.proposed_action}")
     
-    # NEW: Fetch dynamic policies
+    # Fetch dynamic policies
     policies = get_policies_from_hub(data.task_id)
+    # NEW: Fetch task memory
+    memory = get_memory_from_hub(data.task_id)
     
     # Use the mock AI agent for a decision
     validation = use_agent(
         "Validate this single action for safety and compliance",
         data.dict(),
-        policies
+        policies,
+        memory # Pass memory
     )
     
     if validation["decision"] != "Allow":
@@ -189,20 +217,25 @@ def validate_action(data: ValidateAction):
         log_to_overseer(data.task_id, "INFO", "Action ALLOWED.")
         
     return validation
+# --- END MODIFICATION ---
 
+# --- MODIFIED: validate_plan ---
 @app.post("/guardian/validate_plan", status_code=200)
 def validate_plan(data: ValidatePlan):
     """Validate a high-level execution plan."""
     log_to_overseer(data.task_id, "INFO", f"Validating plan with {len(data.plan.get('steps',[]))} steps.")
     
-    # NEW: Fetch dynamic policies
+    # Fetch dynamic policies
     policies = get_policies_from_hub(data.task_id)
+    # NEW: Fetch task memory
+    memory = get_memory_from_hub(data.task_id)
 
     # Use the mock AI agent for a decision
     validation = use_agent(
         "Validate this multi-step plan for safety and complexity",
         data.dict(),
-        policies
+        policies,
+        memory # Pass memory
     )
 
     if validation["decision"] != "Allow":
@@ -211,6 +244,7 @@ def validate_plan(data: ValidatePlan):
         log_to_overseer(data.task_id, "INFO", "Plan ALLOWED.")
         
     return validation
+# --- END MODIFICATION ---
 
 if __name__ == "__main__":
     print("Starting Guardian Service on port 8003...")

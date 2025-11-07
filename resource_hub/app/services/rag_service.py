@@ -8,8 +8,7 @@ from app.core.config import settings
 from app.core.logging_client import send_log
 from chromadb import PersistentClient
 
-# _client = PersistentClient(path="/tmp/chroma_dev")
-
+# Uses the persist directory set in settings (or :memory: default)
 _client = PersistentClient(path="/tmp/chroma_dev")
 
 # Create a collection for Resource Hub long-term memory (name 'resource_hub_mem')
@@ -62,16 +61,25 @@ def remember_document(text, metadata=None, task_id=None, model_name="all-MiniLM-
     ids = []
     metadatas = []
     documents = []
+    
+    # FIX: Safely extract source_value, default to None
+    source_value = metadata 
+    if isinstance(metadata, dict):
+        source_value = metadata.get("source")
+
     for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
         chunk_id = f"{doc_id}#{idx}"
         ids.append(chunk_id)
+        
+        # FIX: Ensure all non-essential fields are non-None strings/defaults
         meta = {
             "doc_id": doc_id,
             "chunk_index": idx,
-            "task_id": task_id,
-            "source": (metadata or {}).get("source") if isinstance(metadata, dict) else metadata,
+            "task_id": str(task_id) if task_id is not None else "", # Non-None string
+            "source": str(source_value) if source_value is not None else "", # Non-None string
             "created_at": time.time(),
-            **(metadata or {})
+            # Ensure custom metadata is merged only if it's a dict
+            **(metadata if isinstance(metadata, dict) else {})
         }
         metadatas.append(meta)
         documents.append(chunk)

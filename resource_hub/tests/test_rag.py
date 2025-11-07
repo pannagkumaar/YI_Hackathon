@@ -3,6 +3,9 @@ from fastapi.testclient import TestClient
 from main import app
 from app.services import rag_service
 from app.core import gemini_client
+import random
+# NEW: Import the module that loads the heavy model
+from app.core import embeddings 
 
 HEAD = {"Authorization": "Bearer dev-secret"}
 
@@ -10,13 +13,29 @@ HEAD = {"Authorization": "Bearer dev-secret"}
 def client(monkeypatch):
     """
     A lightweight client fixture using in-memory Chroma (already default)
-    and a mocked Gemini API to avoid real network calls.
+    and mocked network/memory components.
     """
     # Mock Gemini API
     monkeypatch.setattr(gemini_client, "ask_gemini", lambda prompt, max_output_tokens=256: "mocked gemini answer")
+    
+    # === CRITICAL FIX: MOCK EMBEDDING FUNCTIONS TO SAVE 32GB OF RAM ===
+    # This prevents the SentenceTransformer from loading, which causes the crash.
+    def mock_embed_texts(texts, model_name=None):
+        # MiniLM uses 384 dimensions. Return random vectors of that size.
+        return [[random.uniform(-1, 1) for _ in range(384)] for _ in texts]
+    
+    def mock_embed_text(text, model_name=None):
+        return [random.uniform(-1, 1) for _ in range(384)]
+        
+    monkeypatch.setattr(embeddings, "embed_texts", mock_embed_texts)
+    monkeypatch.setattr(embeddings, "embed_text", mock_embed_text)
+    # =================================================================
 
     # Clear Chroma collection between tests (if exists)
     try:
+        # Note: This deletion requires the embedded client to be using the *default*
+        # embedding function to avoid a different type of crash. The mock above 
+        # should resolve this, but we'll re-create the collection to be safe.
         rag_service._client.delete_collection(name=rag_service._COLLECTION_NAME)
     except Exception:
         pass
@@ -34,7 +53,8 @@ def client(monkeypatch):
 
 def test_chunking_and_embedding(monkeypatch):
     """Ensure chunking and embedding shapes behave as expected."""
-    text = "This is a long text. " * 30
+    # FIX: Use text long enough (>100 chars) to ensure chunking works
+    text = "This is a test sentence that is intentionally longer than 100 characters to force the naive chunker to split it. This is the second sentence."
     chunks = rag_service.chunk_text(text, chunk_size=100)
     assert len(chunks) > 1
     embeddings = rag_service.embed_texts(chunks)

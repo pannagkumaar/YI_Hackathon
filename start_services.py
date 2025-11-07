@@ -42,14 +42,30 @@ try:
     print("Verifying unified environment is installed...")
     # Install the *single* root requirements.txt
     # This command runs from the script's directory (current_dir)
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-        cwd=current_dir,
-        check=True,
-        capture_output=True,
-        text=True
-    )
-    print("Environment verified.")
+    install_cmd = [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
+    
+    # Check if pip install needs to run
+    # Simple check: run pip install and capture output
+    try:
+        # Use check=True to raise an error if pip fails
+        subprocess.run(
+            install_cmd,
+            cwd=current_dir,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print("Environment verified.")
+    except subprocess.CalledProcessError as e:
+        print(f"\n--- FAILED TO INSTALL REQUIREMENTS ---")
+        print(f"Error: {e}")
+        print(f"Details: {e.stderr}")
+        sys.exit(1) # Exit the script if dependencies fail
+    except FileNotFoundError:
+        print(f"\n--- FAILED TO INSTALL REQUIREMENTS ---")
+        print(f"Error: 'requirements.txt' not found in {current_dir}")
+        print("Please create the unified 'requirements.txt' file in the project root.")
+        sys.exit(1)
     # --- END MODIFIED ---
 
 
@@ -64,7 +80,6 @@ try:
             hub_dir = os.path.join(current_dir, "resource_hub")
             cmd = [sys.executable, "main.py"]
             cwd = hub_dir
-            # We no longer install requirements here
             
         process = subprocess.Popen(cmd, cwd=cwd)
         processes.append(process)

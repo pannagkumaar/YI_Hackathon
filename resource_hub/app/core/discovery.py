@@ -2,6 +2,11 @@ import requests, time, asyncio
 from app.core.config import settings
 from app.core.logging_client import send_log
 
+# --- Integration Fix ---
+# Define the authentication header using the shared secret from settings
+AUTH_HEADER = {"X-SHIVA-SECRET": settings.SHARED_SECRET}
+# --- End Integration Fix ---
+
 _cache = {}
 _cache_expiry = {}
 
@@ -12,7 +17,16 @@ def discover(service_name: str):
     if not settings.DIRECTORY_URL:
         return None
     try:
-        resp = requests.get(f"{settings.DIRECTORY_URL}/discover", params={"service_name": service_name}, timeout=2)
+        # --- Integration Fix ---
+        # Add auth header to discovery calls as well
+        resp = requests.get(
+            f"{settings.DIRECTORY_URL}/discover", 
+            params={"service_name": service_name}, 
+            timeout=2,
+            headers=AUTH_HEADER
+        )
+        # --- End Integration Fix ---
+        
         resp.raise_for_status()
         data = resp.json()
         # Directory may use 'url' or 'service_url' keys
@@ -35,7 +49,15 @@ def register_once():
         "ttl_seconds": settings.DIRECTORY_TTL
     }
     try:
-        requests.post(f"{settings.DIRECTORY_URL}/register", json=payload, timeout=2)
+        # --- Integration Fix ---
+        # Add the authentication header to the registration POST
+        requests.post(
+            f"{settings.DIRECTORY_URL}/register", 
+            json=payload, 
+            timeout=2,
+            headers=AUTH_HEADER
+        )
+        # --- End Integration Fix ---
         send_log(settings.SERVICE_NAME, None, "INFO", "Registered with Directory")
         return True
     except Exception as e:
@@ -55,7 +77,15 @@ async def start_heartbeat_loop():
                 "ttl_seconds": settings.DIRECTORY_TTL
             }
             try:
-                requests.post(f"{settings.DIRECTORY_URL}/register", json=payload, timeout=2)
+                # --- Integration Fix ---
+                # Add the authentication header to the heartbeat POST
+                requests.post(
+                    f"{settings.DIRECTORY_URL}/register", 
+                    json=payload, 
+                    timeout=2,
+                    headers=AUTH_HEADER
+                )
+                # --- End Integration Fix ---
                 send_log(settings.SERVICE_NAME, None, "DEBUG", "Heartbeat: re-registered with Directory")
             except Exception as e:
                 send_log(settings.SERVICE_NAME, None, "WARN", f"Heartbeat failed: {e}")

@@ -51,7 +51,7 @@ def test_invoke():
     
     try:
         payload = {
-            "goal": "should we shutdown system now?",
+            "goal": "perform health check of server 1234",
             "context": {"user": "admin", "priority": "high"}
         }
         # 1. Send the initial request

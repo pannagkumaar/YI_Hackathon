@@ -50,3 +50,24 @@ def generate_json(model, prompt_parts: List[str]) -> dict:
         # Handle other potential errors (e.g., API errors, content safety blocks)
         print(f"[Gemini] FAILED to generate content: {e}")
         return {"error": f"Model generation failed: {e}"}
+
+# 5. Helper function to generate embeddings for RAG
+def get_embedding(text: str, task_type: str = "retrieval_document") -> List[float]:
+    """Generates an embedding vector for the given text using Gemini's embedding model.
+    
+    Args:
+        text: The text to embed
+        task_type: "retrieval_document" for documents, "retrieval_query" for queries
+    """
+    try:
+        # Use Gemini's text-embedding-004 model
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type=task_type
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"[Gemini] FAILED to generate embedding: {e}")
+        # Return zero vector as fallback
+        return [0.0] * 768  # text-embedding-004 returns 768-dimensional vectors

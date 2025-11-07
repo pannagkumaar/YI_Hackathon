@@ -6,7 +6,9 @@ import requests
 import threading
 import time
 from security import get_api_key
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
+import math
+from gemini_client import get_embedding
 
 # --- Authentication & Service Constants ---
 app = FastAPI(
@@ -124,6 +126,12 @@ def heartbeat():
 @app.on_event("startup")
 def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
+    # Initialize vector store with embeddings
+    try:
+        initialize_vector_store()
+    except Exception as e:
+        print(f"[ResourceHub] WARNING: Failed to initialize vector store: {e}")
+        print("[ResourceHub] Falling back to keyword-based search only.")
 # --- End Service Registration ---
 
 
@@ -200,9 +208,128 @@ MOCK_RUNBOOK = [
     {"title": "Deploy checklist", "text": "Deploy to staging first. Run health checks: list of commands: check-disk, check-db-connections, run smoke tests."}
 ]
 
+# --- RAG Vector Store ---
+# Structure: { "id": {"text": str, "title": str, "embedding": List[float], "source": str } }
+vector_store: Dict[str, Dict] = {}
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    """Calculate cosine similarity between two vectors."""
+    if len(vec1) != len(vec2):
+        return 0.0
+    
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(a * a for a in vec2))
+    
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    
+    return dot_product / (magnitude1 * magnitude2)
+
+def initialize_vector_store():
+    """Initialize the vector store with embeddings for runbook, policies, and tools."""
+    global vector_store
+    vector_store = {}
+    doc_id = 0
+    
+    print("[ResourceHub] Initializing vector store with embeddings...")
+    
+    # Add runbook entries
+    for entry in MOCK_RUNBOOK:
+        text = f"{entry['title']}: {entry['text']}"
+        embedding = get_embedding(text, task_type="retrieval_document")
+        vector_store[str(doc_id)] = {
+            "text": entry['text'],
+            "title": entry['title'],
+            "embedding": embedding,
+            "source": "runbook"
+        }
+        doc_id += 1
+    
+    # Add policy entries
+    for policy in MOCK_POLICIES.get("global", []):
+        embedding = get_embedding(policy, task_type="retrieval_document")
+        vector_store[str(doc_id)] = {
+            "text": policy,
+            "title": "Policy",
+            "embedding": embedding,
+            "source": "policy"
+        }
+        doc_id += 1
+    
+    # Add tool entries
+    for tool in MOCK_TOOLS.get("tools", []):
+        text = f"{tool['name']}: {tool['description']}"
+        embedding = get_embedding(text, task_type="retrieval_document")
+        vector_store[str(doc_id)] = {
+            "text": tool['description'],
+            "title": f"Tool: {tool['name']}",
+            "embedding": embedding,
+            "source": "tool"
+        }
+        doc_id += 1
+    
+    print(f"[ResourceHub] Vector store initialized with {len(vector_store)} documents.")
+
+def search_vector_store(query: str, max_results: int = 3) -> List[Dict]:
+    """Search the vector store using semantic similarity."""
+    if not vector_store:
+        return []
+    
+    # Get query embedding (use retrieval_query task type for queries)
+    try:
+        query_embedding = get_embedding(query, task_type="retrieval_query")
+    except Exception as e:
+        print(f"[ResourceHub] Failed to get query embedding: {e}")
+        # Fallback to keyword search
+        return fallback_keyword_search(query, max_results)
+    
+    # Calculate similarities
+    similarities: List[Tuple[str, float, Dict]] = []
+    for doc_id, doc in vector_store.items():
+        similarity = cosine_similarity(query_embedding, doc['embedding'])
+        similarities.append((doc_id, similarity, doc))
+    
+    # Sort by similarity (descending)
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return top results
+    results = []
+    for doc_id, similarity, doc in similarities[:max_results]:
+        if similarity > 0.1:  # Minimum similarity threshold
+            results.append({
+                "title": doc['title'],
+                "text": doc['text'],
+                "source": doc['source'],
+                "similarity": round(similarity, 4)
+            })
+    
+    return results
+
+def fallback_keyword_search(query: str, max_results: int) -> List[Dict]:
+    """Fallback to keyword search if embedding fails."""
+    query_lower = query.lower()
+    results = []
+    
+    # Search runbook
+    for entry in MOCK_RUNBOOK:
+        if query_lower in entry['title'].lower() or query_lower in entry['text'].lower():
+            results.append({"title": entry['title'], "text": entry['text'], "source": "runbook", "similarity": 0.5})
+            if len(results) >= max_results:
+                return results
+    
+    # Search policies
+    for policy in MOCK_POLICIES.get("global", []):
+        if query_lower in policy.lower():
+            results.append({"title": "Policy", "text": policy, "source": "policy", "similarity": 0.5})
+            if len(results) >= max_results:
+                return results
+    
+    return results
+
 @app.post("/runbook/search", status_code=200)
 def runbook_search(q: RunbookQuery, api_key: str = Depends(get_api_key)):
-    """Very small mock RAG endpoint — searches runbook and policies for query terms."""
+    """Legacy endpoint - searches runbook and policies for query terms (keyword-based)."""
     query = q.query.lower().strip()
     max_snips = q.max_snippets or 3
 
@@ -235,6 +362,48 @@ def runbook_search(q: RunbookQuery, api_key: str = Depends(get_api_key)):
     if not snippets:
         snippets = [{"title": "No relevant runbook found", "text": "No direct guidance found for this query in runbook/policies/tools."}]
 
+    return {"snippets": snippets}
+
+class RAGQuery(BaseModel):
+    query: str
+    max_snippets: Optional[int] = 3
+    task_id: Optional[str] = None
+
+@app.post("/rag/query", status_code=200)
+def rag_query(q: RAGQuery, api_key: str = Depends(get_api_key)):
+    """Proper RAG endpoint using vector embeddings for semantic search."""
+    query = q.query.strip()
+    max_snippets = q.max_snippets or 3
+    task_id = q.task_id or "N/A"
+    
+    log_to_overseer(task_id, "INFO", f"RAG query received: {query[:100]}")
+    
+    if not query:
+        return {"snippets": [], "message": "Empty query provided"}
+    
+    # Use vector-based semantic search
+    results = search_vector_store(query, max_results=max_snippets)
+    
+    # Format results to match expected structure
+    snippets = []
+    for result in results:
+        snippets.append({
+            "title": result["title"],
+            "text": result["text"],
+            "source": result.get("source", "unknown"),
+            "similarity": result.get("similarity", 0.0)
+        })
+    
+    if not snippets:
+        snippets = [{
+            "title": "No relevant documents found",
+            "text": "No semantically similar documents found for this query.",
+            "source": "system",
+            "similarity": 0.0
+        }]
+    
+    log_to_overseer(task_id, "INFO", f"RAG query returned {len(snippets)} snippets")
+    
     return {"snippets": snippets}
 
 

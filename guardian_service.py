@@ -63,22 +63,50 @@ def sanitize_for_llm(text: str) -> str:
 
 # Helper: fetch runbook snippets from Resource Hub (RAG)
 def fetch_runbook_snippets(task_id: str, query: str, max_snippets: int = 3):
+    """Fetch runbook snippets using RAG (vector-based semantic search)."""
     try:
         hub_url = discover("resource-hub-service")
+        # Use the proper /rag/query endpoint for semantic search
+        r = requests.post(f"{hub_url}/rag/query",
+                          json={"query": query, "max_snippets": max_snippets, "task_id": task_id},
+                          headers=AUTH_HEADER,
+                          timeout=10)  # Increased timeout for embedding generation
+        if r.status_code == 200:
+            snippets = r.json().get("snippets", [])
+            # Remove similarity scores from response (not needed by Guardian)
+            for snippet in snippets:
+                snippet.pop("similarity", None)
+                snippet.pop("source", None)
+            return snippets
+        else:
+            print(f"[Guardian] RAG query failed: {r.status_code} {r.text}")
+            log_to_overseer(task_id, "WARN", f"RAG query failed: {r.status_code}", {"text": r.text[:200]})
+            # Fallback to legacy endpoint
+            return _fallback_runbook_search(hub_url, task_id, query, max_snippets)
+    except Exception as e:
+        print(f"[Guardian] Exception calling RAG: {e}")
+        log_to_overseer(task_id, "WARN", f"RAG fetch error: {e}")
+        # Fallback to legacy endpoint
+        try:
+            hub_url = discover("resource-hub-service")
+            return _fallback_runbook_search(hub_url, task_id, query, max_snippets)
+        except:
+            pass
+
+    # Final fallback
+    return [{"title": "No runbook available", "text": "No additional runbook context available."}]
+
+def _fallback_runbook_search(hub_url: str, task_id: str, query: str, max_snippets: int):
+    """Fallback to legacy /runbook/search endpoint if RAG fails."""
+    try:
         r = requests.post(f"{hub_url}/runbook/search",
                           json={"query": query, "max_snippets": max_snippets},
                           headers=AUTH_HEADER,
                           timeout=5)
         if r.status_code == 200:
             return r.json().get("snippets", [])
-        else:
-            print(f"[Guardian] Runbook search failed: {r.status_code} {r.text}")
-            log_to_overseer(task_id, "WARN", f"Runbook search failed: {r.status_code}", {"text": r.text[:200]})
     except Exception as e:
-        print(f"[Guardian] Exception calling runbook: {e}")
-        log_to_overseer(task_id, "WARN", f"Runbook fetch error: {e}")
-
-    # fallback
+        print(f"[Guardian] Fallback runbook search also failed: {e}")
     return [{"title": "No runbook available", "text": "No additional runbook context available."}]
 
 def llm_decide_action(task_id: str, proposed_action: str, context: dict, policies: list) -> dict:

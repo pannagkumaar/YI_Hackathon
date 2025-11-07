@@ -35,9 +35,17 @@ POLICY_DB = {
     ]
 }
 
-# --- UPDATED: MOCK_TOOLS now includes parameter descriptions ---
+# --- UPDATED: MOCK_TOOLS now includes the new deploy_model tool ---
 MOCK_TOOLS = {
     "tools": [
+        {
+            "name": "deploy_model",
+            "description": "Deploys a specific model version to the production environment.",
+            "parameters": {
+                "model_version": "string (e.g., '1.2.3')",
+                "environment": "string (default: 'production')"
+            }
+        },
         {
             "name": "run_script",
             "description": "Executes a pre-defined, safe script. (e.g., a deployment script).",
@@ -198,7 +206,7 @@ def get_tools():
     log_to_overseer("N/A", "INFO", "Tool list requested.")
     return MOCK_TOOLS
 
-# --- NEW: Tool Execution Endpoint (The "Armory") ---
+# --- UPDATED: Tool Execution Endpoint (The "Armory") ---
 @app.post("/tools/execute", status_code=200)
 def execute_tool(exec_data: ToolExecution):
     """(The Armory) Securely execute a given tool."""
@@ -239,6 +247,25 @@ def execute_tool(exec_data: ToolExecution):
                 log_to_overseer(task_id, "WARN", f"Tool '{tool_name}' deviation: {error}")
                 return {"status": "deviation", "error": error}
 
+        # --- THIS IS THE NEWLY ADDED BLOCK ---
+        elif tool_name == "deploy_model":
+            # This is a safe, simulated deployment
+            model_version = params.get("model_version")
+            env = params.get("environment", "production") # Default to production
+            
+            if not model_version:
+                # If the AI forgot the version, return a deviation
+                log_to_overseer(task_id, "WARN", "Tool 'deploy_model' deviation: Missing 'model_version'")
+                return {"status": "deviation", "error": "Missing 'model_version' parameter"}
+
+            # Simulate the deployment work (e.g., 1 second delay)
+            time.sleep(1) 
+            
+            output = f"Successfully simulated deployment of model v{model_version} to {env}."
+            log_to_overseer(task_id, "INFO", f"Tool '{tool_name}' success: {output}")
+            return {"status": "success", "output": output}
+        # --- END OF NEW BLOCK ---
+
         elif tool_name == "fetch_data":
             # --- Real Network Tool ---
             url = params.get("url")
@@ -260,7 +287,7 @@ def execute_tool(exec_data: ToolExecution):
         # Catch-all for subprocess timeouts, requests errors, etc.
         log_to_overseer(task_id, "ERROR", f"Tool '{tool_name}' failed: {e}", params)
         return {"status": "deviation", "error": f"Tool failed to execute: {str(e)}"}
-# --- END NEW ---
+# --- END UPDATED ---
 
 
 # --- Memory Endpoints (No change) ---

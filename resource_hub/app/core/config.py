@@ -10,8 +10,13 @@ class Settings(BaseSettings):
     DB_PATH: str = "data/short_term.db"
     ITSM_PATH: str = "data/itsm_data.json"
     DEFAULT_TTL: int = 86400
-    SERVICE_NAME: str = "resource-hub"
-    SERVICE_BASE_URL: str = "http://127.0.0.1:8000"
+
+    # --- THIS IS THE FIX ---
+    # Match the name your other services are discovering
+    SERVICE_NAME: str = "resource-hub-service"
+    # --- END FIX ---
+
+    SERVICE_BASE_URL: str = "http://127.0.0.1:8000" # Port 8000
     DIRECTORY_TTL: int = 300
 
     # ---- Phase 2 fields ----
@@ -30,7 +35,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="allow"  # allow extra vars for forward-compatibility
+        extra="allow"
     )
 
 settings = Settings()

@@ -1,0 +1,2 @@
+env:
+  DB_PATH: /tmp/test.db

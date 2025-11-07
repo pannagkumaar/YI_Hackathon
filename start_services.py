@@ -2,16 +2,13 @@ import subprocess
 import time
 import sys
 import atexit
-import os # Import os
+import os
 
 # List of all 6 services.
 services = [
     "directory_service.py",
     "overseer_service.py",
-    # --- THIS IS THE FIX ---
-    # "resource_hub_service.py", # <-- DELETE THIS OLD FILE
-    "resource_hub/main.py",     # <-- ADD THIS NEW FILE
-    # --- END FIX ---
+    "resource_hub/main.py",  # <-- Corrected to point to the new hub
     "guardian_service.py",
     "partner_service.py",
     "manager_service.py"
@@ -37,36 +34,37 @@ try:
     print("Starting all 6 SHIVA services in parallel...")
     print(f"Using Python executable: {sys.executable}\n")
 
-    # --- ADDED: Change directory for the new hub ---
-    # Get the directory of the current script
     current_dir = os.path.dirname(os.path.realpath(__file__))
     if not current_dir:
         current_dir = os.getcwd()
-    # --- END ADD ---
+
+    # --- MODIFIED: One-time environment setup ---
+    print("Verifying unified environment is installed...")
+    # Install the *single* root requirements.txt
+    # This command runs from the script's directory (current_dir)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+        cwd=current_dir,
+        check=True,
+        capture_output=True,
+        text=True
+    )
+    print("Environment verified.")
+    # --- END MODIFIED ---
+
 
     for service in services:
         print(f"Starting {service}...")
         
-        # --- MODIFIED: Handle the new hub's path ---
         cmd = [sys.executable, service]
         cwd = current_dir # Default to current directory
         
         if service == "resource_hub/main.py":
-            # The new hub needs to be run from *within* its folder
-            # to find its 'app', 'data', etc.
+            # The new hub must be run from *within* its folder
             hub_dir = os.path.join(current_dir, "resource_hub")
             cmd = [sys.executable, "main.py"]
             cwd = hub_dir
-            # Also ensure its dependencies are installed
-            print("   (Ensuring resource_hub requirements are installed...)")
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-                cwd=hub_dir,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-        # --- END MODIFIED ---
+            # We no longer install requirements here
             
         process = subprocess.Popen(cmd, cwd=cwd)
         processes.append(process)
@@ -87,7 +85,10 @@ except KeyboardInterrupt:
 except Exception as e:
     print(f"\n--- FAILED TO START SERVICES ---")
     print(f"Error: {e}")
-    if hasattr(e, 'stderr'):
-        print(f"Details: {e.stderr}")
+    if hasattr(e, 'stderr') and e.stderr:
+        if isinstance(e.stderr, bytes):
+            print(f"Details: {e.stderr.decode()}")
+        else:
+            print(f"Details: {e.stderr}")
     print("Shutting down any processes that were started...")
     cleanup()

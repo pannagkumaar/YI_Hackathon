@@ -1,14 +1,9 @@
 # 📄 security.py
-# (This is a copy of the security.py from your project root)
-
 from fastapi import Security, HTTPException, status
 from fastapi.security.api_key import APIKeyHeader
 
-# --- INTEGRATION FIX ---
-# Use the *exact same* key and header name as your other services
-API_KEY = "mysecretapikey" 
+API_KEY = "mysecretapikey" # This is your shared secret
 API_KEY_NAME = "X-SHIVA-SECRET"
-# --- END FIX ---
 
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 

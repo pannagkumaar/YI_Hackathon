@@ -1,6 +1,20 @@
+# fastapi==0.95.2  <-- REMOVED, chromadb will get the right version
+# uvicorn[standard]==0.22.0 <-- REMOVED
+# requests==2.31.0 <-- REMOVED
+python-dotenv==1.0.0
+pytest==7.4.0
+# httpx==0.24.0 <-- REMOVED, THIS WAS THE CONFLICT
+# pydantic==1.10.12 <-- REMOVED
+sqlmodel==0.0.8
+chromadb==0.5.5
+sentence-transformers==2.2.2
+google-generativeai>=0.3.2
+numpy
+
+# ADDED: Let pip pull in the correct versions of these
+# that are compatible with chromadb
 fastapi
 uvicorn[standard]
 requests
-pydantic
 httpx
-google-generativeai
+pydantic

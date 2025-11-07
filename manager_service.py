@@ -253,12 +253,43 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             await log_to_overseer(client, task_id, "INFO", "Validating plan with Guardian...")
             guardian_url = await discover(client, "guardian-service")
             g_resp = await client.post(f"{guardian_url}/guardian/validate_plan", json={
-                "task_id": task_id, "plan": plan
+                "task_id": task_id,
+                "plan": plan
             }, headers=AUTH_HEADER)
             
-            if g_resp.status_code != 200 or g_resp.json()["decision"] != "Allow":
-                reason = g_resp.json().get("reason", "Unknown reason")
-                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", g_resp.json())
+            # Handle plan decision outcomes
+            if g_resp.status_code != 200:
+                error_text = g_resp.text[:200] if g_resp.text else "No response body"
+                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: HTTP {g_resp.status_code} - {error_text}")
+                task["status"] = "REJECTED"
+                task["reason"] = f"Plan validation failed: HTTP {g_resp.status_code}"
+                task["deviation_details"] = {"observation": task["reason"]}
+                return
+
+            # Parse JSON response with error handling
+            try:
+                decision_payload = g_resp.json()
+            except Exception as json_err:
+                error_text = g_resp.text[:200] if g_resp.text else "Empty response"
+                await log_to_overseer(client, task_id, "ERROR", f"Failed to parse Guardian response: {json_err} - Response: {error_text}")
+                task["status"] = "REJECTED"
+                task["reason"] = f"Guardian returned invalid JSON: {str(json_err)}"
+                task["deviation_details"] = {"observation": task["reason"]}
+                return
+
+            decision = decision_payload.get("decision")
+            reason = decision_payload.get("reason", "Unknown reason")
+
+            if decision == "Allow":
+                pass
+            elif decision == "Ambiguous":
+                await log_to_overseer(client, task_id, "WARN", f"Plan requires human review: {reason}", decision_payload)
+                task["status"] = "PAUSED_REVIEW"
+                task["reason"] = f"Plan requires human review: {reason}"
+                task["deviation_details"] = {"observation": task["reason"]}
+                return
+            else:
+                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", decision_payload)
                 task["status"] = "REJECTED"
                 task["reason"] = f"Plan validation failed: {reason}"
                 task["deviation_details"] = {"observation": f"Plan validation failed: {reason}"}
@@ -275,13 +306,16 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             await execute_plan_from_step(task_id, 0)
 
         except Exception as e:
-            print(f"[Manager] Unhandled exception in background task {task_id}: {e}")
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            print(f"[Manager] Unhandled exception in background task {task_id}: {error_msg}")
+            import traceback
+            traceback.print_exc()
             try:
-                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
+                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {error_msg}")
             except: pass
             task["status"] = "FAILED"
-            task["reason"] = str(e)
-            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
+            task["reason"] = error_msg
+            task["deviation_details"] = {"observation": f"Unhandled exception: {error_msg}"}
 
 # --- Public API Endpoints ---
 

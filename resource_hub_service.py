@@ -6,7 +6,7 @@ import requests
 import threading
 import time
 from security import get_api_key
-from typing import List
+from typing import List, Optional
 
 # --- Authentication & Service Constants ---
 app = FastAPI(
@@ -187,6 +187,57 @@ def query_rag(task_id: str, query: str):
     return {"insight": insight}
 
 # --- End NEW Memory Endpoints ---
+
+
+class RunbookQuery(BaseModel):
+    query: str
+    max_snippets: Optional[int] = 3
+
+# A mock "runbook" store you can extend later
+MOCK_RUNBOOK = [
+    {"title": "Delete operations", "text": "Deleting files: never run 'rm -rf' on production. Use backup->archive first. Only operations team may approve."},
+    {"title": "Shutdown procedure", "text": "Planned shutdowns must be scheduled and approved; emergency shutdown needs signoff from on-call. Use `systemctl` carefully."},
+    {"title": "Deploy checklist", "text": "Deploy to staging first. Run health checks: list of commands: check-disk, check-db-connections, run smoke tests."}
+]
+
+@app.post("/runbook/search", status_code=200)
+def runbook_search(q: RunbookQuery, api_key: str = Depends(get_api_key)):
+    """Very small mock RAG endpoint — searches runbook and policies for query terms."""
+    query = q.query.lower().strip()
+    max_snips = q.max_snippets or 3
+
+    # naive keyword match across policies, runbook, tools
+    snippets = []
+
+    # search MOCK_RUNBOOK
+    for r in MOCK_RUNBOOK:
+        if query in r["title"].lower() or query in r["text"].lower():
+            snippets.append({"title": r["title"], "text": r["text"]})
+            if len(snippets) >= max_snips:
+                break
+
+    # search policies (as small explanatory snippets)
+    if len(snippets) < max_snips:
+        for p in MOCK_POLICIES.get("global", []):
+            if query in p.lower() or any(w in p.lower() for w in query.split()):
+                snippets.append({"title": "Policy", "text": p})
+                if len(snippets) >= max_snips:
+                    break
+
+    # search tools descriptions
+    if len(snippets) < max_snips:
+        for t in MOCK_TOOLS.get("tools", []):
+            if query in t["name"].lower() or query in t["description"].lower():
+                snippets.append({"title": f"Tool: {t['name']}", "text": t["description"]})
+                if len(snippets) >= max_snips:
+                    break
+
+    if not snippets:
+        snippets = [{"title": "No relevant runbook found", "text": "No direct guidance found for this query in runbook/policies/tools."}]
+
+    return {"snippets": snippets}
+
+
 
 if __name__ == "__main__":
     print(f"Starting Resource Hub Service on port {SERVICE_PORT}...")

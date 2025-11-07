@@ -251,15 +251,28 @@ async def execute_goal(data: ExecuteGoal):
                     "proposed_action": f"{action}:{action_input}",
                     "context": data.context
                 }, headers=AUTH_HEADER)
+                
+                # API Contract: Guardian returns 403 Forbidden for Deny decisions
+                if g_resp.status_code == 403:
+                    decision_data = g_resp.json()
+                    reason = decision_data.get("reason", "Unknown reason")
+                    await log_to_overseer(client, task_id, "ERROR", f"Action validation FAILED: {reason}", decision_data)
+                    return {"task_id": task_id, "status": "ACTION_REJECTED", "reason": f"Guardian denied action: {reason}"}
+                
+                # For 200 OK, check the decision
                 g_resp.raise_for_status()
-
-                if g_resp.json()["decision"] != "Allow":
-                    reason = g_resp.json().get("reason", "Unknown reason")
-                    await log_to_overseer(client, task_id, "ERROR", f"Action validation FAILED: {reason}", g_resp.json())
+                decision_data = g_resp.json()
+                if decision_data.get("decision") != "Allow":
+                    reason = decision_data.get("reason", "Unknown reason")
+                    await log_to_overseer(client, task_id, "ERROR", f"Action validation FAILED: {reason}", decision_data)
                     return {"task_id": task_id, "status": "ACTION_REJECTED", "reason": f"Guardian denied action: {reason}"}
                 
                 await log_to_overseer(client, task_id, "INFO", f"Action validation PASSED: {action}")
             
+            except httpx.HTTPStatusError as e:
+                # Handle other HTTP errors
+                await log_to_overseer(client, task_id, "ERROR", f"Guardian returned HTTP {e.response.status_code}: {e.response.text[:200]}")
+                return {"task_id": task_id, "status": "FAILED", "reason": f"Guardian HTTP error: {e.response.status_code}"}
             except Exception as e:
                 await log_to_overseer(client, task_id, "ERROR", f"Failed to validate action with Guardian: {e}")
                 return {"task_id": task_id, "status": "FAILED", "reason": "Failed to contact Guardian"}
@@ -303,6 +316,15 @@ async def execute_goal(data: ExecuteGoal):
                     "reason": "Unexpected deviation during tool execution",
                     # 'observation' is the AI summary of the *detailed* error
                     "details": observation 
+                }
+
+            # 7. If the simulated action succeeded, consider the step completed
+            if action_status == "success":
+                await log_to_overseer(client, task_id, "INFO", "Step completed successfully after action.", action_result_payload)
+                return {
+                    "task_id": task_id,
+                    "status": "STEP_COMPLETED",
+                    "output": {"observation": observation_text}
                 }
 
         # If loop finishes without completion

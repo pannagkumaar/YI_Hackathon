@@ -332,7 +332,7 @@
             
             let buttons = "";
             // Check if task is in a state that allows user action
-            if (task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED" || task.status === "FAILED") {
+            if (task.status === "PAUSED_REVIEW" || task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED" || task.status === "FAILED") {
                 
                 let approveClass = "approve-go"; // Default to green
                 let approveText = "Approve/Resume";

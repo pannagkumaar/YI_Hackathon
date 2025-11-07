@@ -51,7 +51,7 @@ def test_invoke():
     
     try:
         payload = {
-            "goal": "Deploy new model version 1.2.3 to production",
+            "goal": "should we shutdown system now?",
             "context": {"user": "admin", "priority": "high"}
         }
         # 1. Send the initial request

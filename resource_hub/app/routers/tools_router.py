@@ -3,8 +3,16 @@ from app.repos.tool_repo import register_tool, list_tools, get_tool
 from app.services.tool_service import execute_tool, bootstrap_default_tools
 from app.core.logging_client import send_log
 from app.core.config import settings
+from fastapi import APIRouter, Request, HTTPException, Depends # Add Depends
+from app.core.security import get_api_key
 
-router = APIRouter(prefix="/tools", tags=["Tools"])
+router = APIRouter(
+    prefix="/tools", 
+    tags=["Tools"], 
+    dependencies=[Depends(get_api_key)]
+)
+
+# router = APIRouter(prefix="/tools", tags=["Tools"])
 
 # bootstrap default tools on import
 bootstrap_default_tools()
@@ -27,8 +35,13 @@ def list_all():
 @router.post("/execute")
 def execute(payload: dict, request: Request):
     task_id = payload.get("task_id")
-    tool = payload.get("tool")
-    params = payload.get("params", {})
+    # --- START FIX ---
+    # Accept "tool_name" as a fallback for "tool"
+    tool = payload.get("tool") or payload.get("tool_name") 
+    # Accept "parameters" as a fallback for "params"
+    params = payload.get("params") or payload.get("parameters", {}) 
+    # --- END FIX ---
+
     try:
         out = execute_tool(tool, params)
     except ValueError as e:

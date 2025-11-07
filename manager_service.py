@@ -226,7 +226,7 @@ async def run_task_background(task_id: str, request: InvokeRequest):
     task = tasks_db[task_id]
     task["status"] = "STARTING"
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             await log_to_overseer(client, task_id, "INFO", f"Task started: {request.goal}")
             

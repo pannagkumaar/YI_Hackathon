@@ -6,7 +6,12 @@ import requests
 import threading
 import time
 from security import get_api_key
-from typing import List
+from typing import List, Any # --- NEW ---
+
+# --- NEW: Imports for tool execution ---
+import subprocess
+import sys
+# --- END NEW ---
 
 # --- Authentication & Service Constants ---
 app = FastAPI(
@@ -22,7 +27,6 @@ SERVICE_PORT = 8006
 # --- End Authentication & Service Constants ---
 
 # --- MODIFIED: Mock Database ---
-# MOCK_POLICIES is now POLICY_DB to show it's dynamic
 POLICY_DB = {
     "global": [
         "Disallow: delete",
@@ -30,17 +34,30 @@ POLICY_DB = {
         "Disallow: rm -rf"
     ]
 }
-# --- END MODIFICATION ---
 
+# --- UPDATED: MOCK_TOOLS now includes parameter descriptions ---
 MOCK_TOOLS = {
     "tools": [
-        {"name": "run_script", "description": "Executes a python script."},
-        {"name": "fetch_data", "description": "Fetches data from an API."}
+        {
+            "name": "run_script",
+            "description": "Executes a pre-defined, safe script. (e.g., a deployment script).",
+            "parameters": {
+                "script_name": "string (e.g., 'deploy_model.py')",
+                "args": "list[string] (e.g., ['--version', '1.2.3'])"
+            }
+        },
+        {
+            "name": "fetch_data",
+            "description": "Fetches data from a given URL.",
+            "parameters": {
+                "url": "string (e.g., 'https://api.example.com/data')"
+            }
+        }
     ]
 }
+# --- END UPDATED ---
 
 # --- Short-Term Memory Database ---
-# Stores { "task_id": [ { "thought": "...", "action": "...", "observation": "..." } ] }
 tasks_memory = {}
 # --- End Mock Database ---
 
@@ -49,17 +66,20 @@ class MemoryEntry(BaseModel):
     thought: str
     action: str
     observation: str
-# ---
 
-# --- NEW: Pydantic Model for Policy ---
 class PolicyEntry(BaseModel):
     context: str = "global"
-    policy_rule: str # e.g., "Disallow: curl"
-# ---
+    policy_rule: str 
+
+# --- NEW: Pydantic Model for Tool Execution ---
+class ToolExecution(BaseModel):
+    tool_name: str
+    parameters: dict
+    task_id: str
+# --- END NEW ---
 
 # --- Service Discovery & Logging (No change) ---
 def discover(service_name: str) -> str:
-    """Finds a service's URL from the Directory."""
     print(f"[ResourceHub] Discovering: {service_name}")
     try:
         r = requests.get(
@@ -78,9 +98,8 @@ def discover(service_name: str) -> str:
         raise HTTPException(500, detail="Could not connect to Directory Service")
 
 def log_to_overseer(task_id: str, level: str, message: str, context: dict = {}):
-    """Sends a log entry to the Overseer service."""
     try:
-        overseer_url = discover("overseer-service") # Corrected: 'overseer-service'
+        overseer_url = discover("overseer-service") 
         requests.post(f"{overseer_url}/log/event", json={
             "service": SERVICE_NAME,
             "task_id": task_id,
@@ -94,7 +113,6 @@ def log_to_overseer(task_id: str, level: str, message: str, context: dict = {}):
 
 # --- Service Registration (No change) ---
 def register_self():
-    """Registers this service with the Directory."""
     service_url = f"http://localhost:{SERVICE_PORT}"
     while True:
         try:
@@ -114,7 +132,6 @@ def register_self():
         time.sleep(5)
 
 def heartbeat():
-    """Sends a periodic heartbeat to the Directory."""
     service_url = f"http://localhost:{SERVICE_PORT}"
     while True:
         time.sleep(45)
@@ -138,17 +155,14 @@ def on_startup():
 
 # --- API Endpoints (UPDATED) ---
 
-# --- MODIFIED: Policy Endpoints ---
+# --- Policy Endpoints (No change) ---
 @app.get("/policy/list", status_code=200)
 def get_policies(context: str = "global"):
-    """Fetch compliance policies."""
     log_to_overseer("N/A", "INFO", f"Policy list requested for context: {context}")
-    # Read from the dynamic DB instead of the static MOCK
     return {"policies": POLICY_DB.get(context, [])}
 
 @app.post("/policy/add", status_code=201)
 def add_policy(entry: PolicyEntry):
-    """Add a new policy rule to a context."""
     context = entry.context
     rule = entry.policy_rule
     
@@ -165,7 +179,6 @@ def add_policy(entry: PolicyEntry):
 
 @app.post("/policy/delete", status_code=200)
 def delete_policy(entry: PolicyEntry):
-    """Remove a policy rule from a context."""
     context = entry.context
     rule = entry.policy_rule
     
@@ -176,7 +189,7 @@ def delete_policy(entry: PolicyEntry):
 
     log_to_overseer("N/A", "WARN", f"Policy not found in '{context}': {rule}")
     raise HTTPException(404, detail="Policy not found")
-# --- END MODIFICATION ---
+# --- End Policy Endpoints ---
 
 
 @app.get("/tools/list", status_code=200)
@@ -185,11 +198,74 @@ def get_tools():
     log_to_overseer("N/A", "INFO", "Tool list requested.")
     return MOCK_TOOLS
 
-# --- Memory Endpoints (No change) ---
+# --- NEW: Tool Execution Endpoint (The "Armory") ---
+@app.post("/tools/execute", status_code=200)
+def execute_tool(exec_data: ToolExecution):
+    """(The Armory) Securely execute a given tool."""
+    
+    tool_name = exec_data.tool_name
+    params = exec_data.parameters
+    task_id = exec_data.task_id
+    
+    log_to_overseer(task_id, "INFO", f"Armory: Executing tool '{tool_name}'", params)
+    
+    try:
+        if tool_name == "run_script":
+            # --- Sandboxed Execution ---
+            # This is a *safe* demonstration. It runs 'echo' instead of 
+            # a real script, preventing any harm.
+            # A real implementation would run `[sys.executable, script_name, *args]`
+            # inside a Docker container or with tighter permissions.
+            script_name = params.get("script_name", "unknown_script.py")
+            args = params.get("args", [])
+            
+            # Safe command: just echo the script name and args
+            cmd = ["echo", f"Simulating run of script '{script_name}' with args: {args}"]
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=10, 
+                check=False # Don't raise error on non-zero exit
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                log_to_overseer(task_id, "INFO", f"Tool '{tool_name}' success: {output}")
+                return {"status": "success", "output": output}
+            else:
+                error = result.stderr.strip()
+                log_to_overseer(task_id, "WARN", f"Tool '{tool_name}' deviation: {error}")
+                return {"status": "deviation", "error": error}
 
+        elif tool_name == "fetch_data":
+            # --- Real Network Tool ---
+            url = params.get("url")
+            if not url:
+                raise ValueError("Missing 'url' parameter for fetch_data")
+            
+            r = requests.get(url, timeout=10)
+            r.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            
+            # Return first 500 chars of output
+            output = r.text[:500] + "..." if len(r.text) > 500 else r.text
+            log_to_overseer(task_id, "INFO", f"Tool '{tool_name}' success: Fetched data from {url}")
+            return {"status": "success", "output": f"Fetched {len(r.text)} bytes. Content: {output}"}
+            
+        else:
+            raise HTTPException(404, detail=f"Tool '{tool_name}' not found in Armory.")
+
+    except Exception as e:
+        # Catch-all for subprocess timeouts, requests errors, etc.
+        log_to_overseer(task_id, "ERROR", f"Tool '{tool_name}' failed: {e}", params)
+        return {"status": "deviation", "error": f"Tool failed to execute: {str(e)}"}
+# --- END NEW ---
+
+
+# --- Memory Endpoints (No change) ---
 @app.post("/memory/{task_id}", status_code=201)
 def add_memory(task_id: str, entry: MemoryEntry):
-    """Add a (Thought, Action, Observation) entry to short-term memory."""
     if task_id not in tasks_memory:
         tasks_memory[task_id] = []
     
@@ -199,7 +275,6 @@ def add_memory(task_id: str, entry: MemoryEntry):
 
 @app.get("/memory/{task_id}", status_code=200, response_model=List[MemoryEntry])
 def get_memory(task_id: str):
-    """Retrieve the full short-term memory history for a task."""
     if task_id not in tasks_memory:
         log_to_overseer(task_id, "WARN", f"No memory found for task {task_id}")
         return []
@@ -209,13 +284,8 @@ def get_memory(task_id: str):
 
 @app.get("/memory/query/{task_id}", status_code=200)
 def query_rag(task_id: str, query: str):
-    """(Mock RAG) Query the task's memory for insights."""
-    
     memory_history = tasks_memory.get(task_id, [])
     log_to_overseer(task_id, "INFO", f"RAG query received: {query}")
-    
-    # Mock RAG: A real implementation would use LangChain + ChromaDB
-    # This mock just looks for keywords in the memory
     
     if not memory_history:
         return {"insight": "No memory to analyze, but I'll try my best."}
@@ -230,8 +300,7 @@ def query_rag(task_id: str, query: str):
         insight += "Memory seems nominal."
         
     return {"insight": insight}
-
-# --- End NEW Memory Endpoints ---
+# --- End Memory Endpoints ---
 
 if __name__ == "__main__":
     print(f"Starting Resource Hub Service on port {SERVICE_PORT}...")

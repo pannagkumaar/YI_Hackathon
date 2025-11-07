@@ -1,0 +1,133 @@
+==== START Fri 07 Nov 2025 07:05:24 PM IST ====
+Env: OMP_NUM_THREADS=1, MKL_NUM_THREADS=1, CUDA_VISIBLE_DEVICES=
+sensors logging PID 10441
+top logging PID 10442
+19:05:24
+---- top snapshot --- 19:05:24
+coretemp-isa-0000
+Adapter: ISA adapter
+Package id 0:  +75.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 0:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 1:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 2:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 3:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 4:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 5:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 6:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 7:        +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 8:        +78.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 12:       +63.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 16:       +62.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 20:       +63.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 24:       +59.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 28:       +62.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 32:       +62.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 33:       +62.0°C  (high = +110.0°C, crit = +110.0°C)
+
+ucsi_source_psy_USBC000:001-isa-0000
+Adapter: ISA adapter
+in0:           0.00 V  (min =  +0.00 V, max =  +0.00 V)
+curr1:         0.00 A  (max =  +0.00 A)
+
+BAT0-acpi-0
+Adapter: ACPI interface
+in0:          16.49 V  
+power1:       77.80 W  
+
+iwlwifi_1-virtual-0
+Adapter: Virtual device
+temp1:        +44.0°C  
+
+ucsi_source_psy_USBC000:002-isa-0000
+Adapter: ISA adapter
+in0:           0.00 V  (min =  +0.00 V, max =  +0.00 V)
+curr1:         0.00 A  (max =  +0.00 A)
+
+nvme-pci-0100
+Adapter: PCI adapter
+Composite:    +36.9°C  (low  = -40.1°C, high = +83.8°C)
+                       (crit = +87.8°C)
+Sensor 1:     +50.9°C  (low  = -273.1°C, high = +65261.8°C)
+Sensor 2:     +36.9°C  (low  = -273.1°C, high = +65261.8°C)
+
+acpitz-acpi-0
+Adapter: ACPI interface
+temp1:        +27.8°C  
+
+top - 19:05:24 up 26 min,  1 user,  load average: 1.28, 1.66, 1.43
+Tasks: 463 total,   2 running, 461 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 28.8 us,  5.7 sy,  0.0 ni, 65.1 id,  0.4 wa,  0.0 hi,  0.0 si,  0.0 st 
+MiB Mem :  31516.0 total,  25901.9 free,   4497.7 used,   2494.3 buff/cache     
+MiB Swap:   7813.0 total,   6317.8 free,   1495.2 used.  27018.3 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  10444 harini    20   0   56300  44044  13848 R 100.0   0.1   0:00.21 pytest
+  10447 harini    20   0   11832   5412   3300 R  10.0   0.0   0:00.01 top
+      1 root      20   0   23812   9112   4888 S   0.0   0.0   0:01.54 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_wo+
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      7 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      9 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+     10 root      20   0       0      0      0 I   0.0   0.0   0:00.42 kworker+
+     11 root      20   0       0      0      0 I   0.0   0.0   0:06.80 kworker+
+     12 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+               total        used        free      shared  buff/cache   available
+Mem:            30Gi       4.4Gi        25Gi       1.2Gi       2.4Gi        26Gi
+Swap:          7.6Gi       1.5Gi       6.2Gi
+19:05:25
+coretemp-isa-0000
+Adapter: ISA adapter
+Package id 0: +100.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 0:        +63.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 1:        +63.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 2:        +63.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 3:        +62.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 4:        +72.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 5:        +72.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 6:        +73.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 7:        +73.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 8:        +66.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 12:       +97.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 16:       +65.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 20:       +82.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 24:       +61.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 28:       +66.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 32:       +64.0°C  (high = +110.0°C, crit = +110.0°C)
+Core 33:       +64.0°C  (high = +110.0°C, crit = +110.0°C)
+
+ucsi_source_psy_USBC000:001-isa-0000
+Adapter: ISA adapter
+in0:           0.00 V  (min =  +0.00 V, max =  +0.00 V)
+curr1:         0.00 A  (max =  +0.00 A)
+
+BAT0-acpi-0
+Adapter: ACPI interface
+in0:          16.49 V  
+power1:       77.80 W  
+
+iwlwifi_1-virtual-0
+Adapter: Virtual device
+temp1:        +45.0°C  
+
+ucsi_source_psy_USBC000:002-isa-0000
+Adapter: ISA adapter
+in0:           0.00 V  (min =  +0.00 V, max =  +0.00 V)
+curr1:         0.00 A  (max =  +0.00 A)
+
+nvme-pci-0100
+Adapter: PCI adapter
+Composite:    +36.9°C  (low  = -40.1°C, high = +83.8°C)
+                       (crit = +87.8°C)
+Sensor 1:     +50.9°C  (low  = -273.1°C, high = +65261.8°C)
+Sensor 2:     +36.9°C  (low  = -273.1°C, high = +65261.8°C)
+
+acpitz-acpi-0
+Adapter: ACPI interface
+temp1:        +27.8°C  
+
+.                                                                        [100%]
+1 passed in 0.03s
+==== END Fri 07 Nov 2025 07:05:26 PM IST RC=0 ====

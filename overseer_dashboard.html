@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>Overseer Dashboard</title>
     <style>
         body {
@@ -15,27 +15,15 @@
             min-height: 100vh;
             box-sizing: border-box;
         }
-        .container {
-            flex: 1;
-            padding: 10px;
-            min-width: 45%; /* Prevents containers from becoming too small */
-        }
-        h1, h2 {
-            color: #00b8d4; /* Bright Cyan */
-            border-bottom: 2px solid #00b8d4;
-            padding-bottom: 8px;
-            font-weight: 500;
-        }
-        h2 {
-            color: #00e676; /* Bright Green */
-            border-bottom-color: #00e676;
-        }
+        .container { flex: 1; padding: 10px; min-width: 300px; max-width: 50%; }
+        h1, h2 { color: #00b8d4; border-bottom: 2px solid #00b8d4; padding-bottom: 8px; font-weight: 500; }
+        h2 { color: #00e676; border-bottom-color: #00e676; }
 
-        /* Log Panel */
-        #logs-container {
+        /* Panels */
+        #logs-container, #tasks, #ambiguous {
             width: 98%;
-            height: 80vh;
-            overflow-y: scroll;
+            height: 60vh;
+            overflow-y: auto;
             border: 1px solid #444;
             background-color: #2a2a2a;
             padding: 10px;
@@ -44,214 +32,185 @@
             font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
             font-size: 0.9em;
         }
-        
-        .log-entry {
-            display: flex;
-            flex-wrap: wrap; /* Allows message to wrap */
-            padding: 5px 2px;
-            border-bottom: 1px solid #3a3a3a;
-            line-height: 1.6;
-        }
-        .log-entry:last-child {
-            border-bottom: none;
-        }
-        
-        /* Log Parts */
-        .log-time { color: #888; margin-right: 10px; }
-        .log-service { font-weight: bold; margin-right: 10px; }
-        .log-task { color: #aaa; margin-right: 10px; }
-        .log-level { font-weight: bold; margin-right: 10px; }
-        .log-message { 
-            color: #f0f0f0;
-            white-space: pre-wrap; 
-            word-break: break-all;
-            flex-basis: 100%; /* Message takes its own line */
-            padding-left: 10px;
-            margin-top: 4px;
-        }
-        
-        /* Log Level Colors */
-        .log-level.INFO { color: #28a745; }
-        .log-level.WARN { color: #ffc107; }
-        .log-level.ERROR { color: #dc3545; }
-        .log-entry.ERROR { background-color: rgba(220, 53, 69, 0.05); border-left: 3px solid #dc3545; }
-        .log-entry.WARN { background-color: rgba(255, 193, 7, 0.05); border-left: 3px solid #ffc107; }
 
-        /* Service Colors for Distinguishability */
-        .service-manager-service { color: #00b8d4; } /* Cyan */
-        .service-partner-service { color: #00e676; } /* Green */
-        .service-guardian-service { color: #ffab00; } /* Amber */
-        .service-overseer-service { color: #7c4dff; } /* Deep Purple */
-        .service-resource-hub-service { color: #2979ff; } /* Blue */
-        .service-directory-service { color: #9e9e9e; } /* Grey */
-        .service-unknown { color: #f50057; } /* Pink */
-        
-        /* Task Panel */
-        #tasks {
-            width: 98%;
-            height: 80vh;
-            overflow-y: scroll;
-            border: 1px solid #444;
-            background-color: #2a2a2a;
-            padding: 10px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        }
-        .task-card {
-            border: 1px solid #555;
-            background-color: #333;
-            padding: 12px 15px;
-            margin-bottom: 12px;
-            border-radius: 6px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            transition: all 0.2s ease-in-out;
-        }
-        .task-card:hover {
-            border-color: #777;
-        }
-        .task-card h3 {
-            margin: 0 0 8px 0;
-            color: #eee;
-        }
-        .task-card p {
-            margin: 4px 0;
-        }
-        .task-id {
-            font-size: 0.85em;
-            color: #999;
-            font-family: monospace;
-        }
-        .task-status {
-            font-weight: bold;
-            font-size: 1.1em;
-            text-transform: uppercase;
-            padding: 2px 0;
-        }
-        
-        /* Status Colors */
-        .PENDING, .STARTING, .PLANNING, .CHECKING_HALT, .VALIDATING_PLAN, .RESUMING, .REPLANNING { color: #00b8d4; } /* Cyan */
-        .EXECUTING_STEP { color: #00e676; } /* Green */
-        .PAUSED_DEVIATION, .ACTION_REJECTED, .REJECTED { color: #ffab00; } /* Amber */
-        .FAILED { color: #dc3545; } /* Red */
-        .COMPLETED { color: #28a745; } /* Darker Green */
+        .two-column { display:flex; gap:12px; }
 
-        /* --- UPDATED: Make the context box pop --- */
-        .deviation-details {
-            background-color: #fffbe6; /* Light cream/yellow */
-            color: #5d4037; /* Dark brown/grey text for readability */
-            padding: 10px 12px;
-            border-radius: 4px;
-            font-family: monospace;
-            white-space: pre-wrap; /* Show newlines */
-            word-break: break-all;
-            margin-top: 12px;
-            border: 1px solid #ffecb3; /* Lighter border */
-            border-left: 5px solid #ffab00; /* Main amber accent */
-        }
-        
-        /* --- NEW: Class for the reason text --- */
-        .task-reason {
-            color: #ffc107; /* Amber */
-            font-weight: 600; /* Bolder */
-            margin-top: 8px !important;
-        }
+        .log-entry { display:flex; flex-wrap:wrap; padding:6px 8px; border-bottom:1px solid #3a3a3a; line-height:1.6; }
+        .log-entry:last-child { border-bottom:none; }
+        .log-time { color:#888; margin-right:10px; }
+        .log-service { font-weight:bold; margin-right:10px; }
+        .log-task { color:#aaa; margin-right:10px; }
+        .log-level { font-weight:bold; margin-right:10px; }
+        .log-message { color:#f0f0f0; white-space:pre-wrap; word-break:break-all; flex-basis:100%; padding-left:10px; margin-top:4px; }
 
-        /* --- UPDATED BUTTON LOGIC --- */
-        
-        /* Base button style (no background) */
-        button {
-            color: #fff;
-            border: none;
-            padding: 8px 14px;
-            cursor: pointer;
-            border-radius: 5px;
-            font-weight: 600;
-            font-size: 0.9em;
-            transition: all 0.2s ease;
-            margin-top: 5px;
-            margin-right: 5px;
-        }
-        button:hover {
-            opacity: 0.85;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        }
+        .log-level.INFO { color:#28a745; }
+        .log-level.WARN { color:#ffc107; }
+        .log-level.ERROR { color:#dc3545; }
+        .log-entry.ERROR { background-color: rgba(220,53,69,0.05); border-left:3px solid #dc3545; }
+        .log-entry.WARN { background-color: rgba(255,193,7,0.05); border-left:3px solid #ffc107; }
 
-        /* Specific button classes */
-        button.approve-go {
-            background-color: #28a745; /* Green */
-            color: #fff;
-        }
-        button.approve-go:hover {
-            background-color: #218838;
-        }
+        .service-manager-service { color:#00b8d4; }
+        .service-partner-service { color:#00e676; }
+        .service-guardian-service { color:#ffab00; }
+        .service-overseer-service { color:#7c4dff; }
+        .service-resource-hub-service { color:#2979ff; }
+        .service-directory-service { color:#9e9e9e; }
+        .service-unknown { color:#f50057; }
 
-        button.approve-warn {
-            background-color: #00b8d4; /* Cyan (matches status) */
-            color: #fff;
-        }
-        button.approve-warn:hover {
-            background-color: #0097a7;
-        }
+        .task-card { border:1px solid #555; background:#333; padding:12px 15px; margin-bottom:12px; border-radius:6px; box-shadow:0 2px 4px rgba(0,0,0,0.2); transition:all .2s; }
+        .task-card:hover { border-color:#777; }
+        .task-card h3 { margin:0 0 8px 0; color:#eee; }
+        .task-card p { margin:4px 0; }
+        .task-id { font-size:0.85em; color:#999; font-family:monospace; }
+        .task-status { font-weight:600; font-size:1.05em; text-transform:uppercase; padding:2px 0; }
 
-        button.replan {
-            background-color: #ffc107; /* Yellow */
-            color: #212529; /* Dark text for yellow button */
-        }
-        button.replan:hover {
-            background-color: #ffb300;
+        .PENDING, .STARTING, .PLANNING, .CHECKING_HALT, .VALIDATING_PLAN, .RESUMING, .REPLANNING { color:#00b8d4; }
+        .EXECUTING_STEP { color:#00e676; }
+        .PAUSED_DEVIATION, .ACTION_REJECTED, .REJECTED { color:#ffab00; }
+        .FAILED { color:#dc3545; }
+        .COMPLETED { color:#28a745; }
+
+        .deviation-details { background:#fffbe6; color:#5d4037; padding:10px 12px; border-radius:4px; font-family:monospace; white-space:pre-wrap; word-break:break-all; margin-top:12px; border:1px solid #ffecb3; border-left:5px solid #ffab00; }
+        .task-reason { color:#ffc107; font-weight:700; margin-top:8px !important; }
+
+        button { color:#fff; border:none; padding:8px 14px; cursor:pointer; border-radius:5px; font-weight:600; font-size:.9em; transition:all .2s; margin-top:5px; margin-right:5px; }
+        button:hover { opacity:0.9; box-shadow:0 2px 5px rgba(0,0,0,0.2); }
+        button.approve-go { background:#28a745; }
+        button.approve-warn { background:#00b8d4; }
+        button.replan { background:#ffc107; color:#212529; }
+
+        /* ambiguous panel */
+        .ambiguous-controls { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+        .ambiguous-item { border:1px dashed #666; padding:10px; margin-bottom:8px; border-radius:6px; background:#272727; position:relative; }
+        .ambiguous-meta { font-size:0.85em; color:#aaa; margin-bottom:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        .ambiguous-reason { color:#ffd54f; font-weight:700; margin-bottom:6px; }
+        .ambiguous-evidence { font-family:monospace; white-space:pre-wrap; color:#e8e8e8; background:#161616; padding:8px; border-radius:4px; border:1px solid #333; }
+
+        .badge-pending { background: rgba(0,0,0,0.4); color:#fff; padding:4px 8px; border-radius:12px; font-size:0.8em; border:1px solid #444; margin-left:6px; }
+
+        .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        .small-input { background:#222; color:#eee; border:1px solid #444; padding:6px 8px; border-radius:4px; min-width:120px; }
+        .muted { color:#999; font-size:0.9em; }
+
+        /* responsive */
+        @media (max-width:1100px) {
+            .container { max-width:100%; }
+            .two-column { flex-direction:column; }
+            #logs-container, #tasks, #ambiguous { height:45vh; }
         }
     </style>
 </head>
 <body>
-
     <div class="container">
         <h2>👨‍💼 Task Dashboard (Refreshes every 2s)</h2>
-        <div id="tasks">
-            <pre>Loading tasks...</pre>
+        <div id="tasks"><pre>Loading tasks...</pre></div>
+
+        <h2 style="margin-top:14px;">⚠️ Ambiguous Decisions (Human review)</h2>
+
+        <div class="ambiguous-controls">
+            <label class="muted">Filter service:
+                <select id="filterService" class="small-input"><option value="all">All</option></select>
+            </label>
+
+            <label class="muted">Sort:
+                <select id="sortMode" class="small-input">
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="score_desc">Score ↓</option>
+                    <option value="score_asc">Score ↑</option>
+                </select>
+            </label>
+
+            <label class="muted">Min score:
+                <input id="minScore" type="number" class="small-input" step="0.01" min="0" max="1" placeholder="0.0" />
+            </label>
+
+            <button class="approve-warn" onclick="refreshAmbiguousNow()">Refresh</button>
+            <div style="flex:1"></div>
+            <span class="muted">Pending badge shows how long this item has been visible in the dashboard</span>
         </div>
+
+        <div id="ambiguous"><pre>Loading ambiguous items...</pre></div>
     </div>
 
     <div class="container">
         <h1>🛰️ Overseer - Live Log Stream</h1>
-        <div id="logs-container">
-            <pre id="status" style="color: #00b8d4;">Connecting to WebSocket...</pre>
-        </div>
+        <div id="logs-container"><pre id="status" style="color:#00b8d4;">Connecting to WebSocket...</pre></div>
     </div>
 
     <script>
+        // small helpers
+        function escapeHtml(s) {
+            if (s === null || s === undefined) return "";
+            return String(s).replace(/[&<>"'`=\/]/g, function(ch){ return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;' })[ch]; });
+        }
+        function nowMs() { return Date.now(); }
+        function formatElapsed(ms) {
+            if (!ms || ms < 1000) return "just now";
+            const s = Math.floor(ms/1000);
+            if (s < 60) return `${s}s`;
+            const m = Math.floor(s/60);
+            if (m < 60) return `${m}m ${s%60}s`;
+            const h = Math.floor(m/60);
+            const mm = m%60;
+            return `${h}h ${mm}m`;
+        }
+
+        // DOM refs
         const logsContainer = document.getElementById("logs-container");
         const statusElement = document.getElementById("status");
         const tasksContainer = document.getElementById("tasks");
+        const ambiguousContainer = document.getElementById("ambiguous");
+        const filterServiceEl = document.getElementById("filterService");
+        const sortModeEl = document.getElementById("sortMode");
+        const minScoreEl = document.getElementById("minScore");
 
-        // --- 1. Log WebSocket ---
+        // Data stores
+        let ambiguousCache = []; // raw items from server
+        const firstSeenMap = new Map(); // key: unique id -> ms timestamp when dashboard first saw it
+        const serviceSet = new Set();
+
+        // ws for logs
         const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
         ws.onopen = () => {
-            statusElement.textContent = "Connected. Waiting for logs...";
-            statusElement.style.color = "#28a745";
+            if (statusElement) { statusElement.textContent = "Connected. Waiting for logs..."; statusElement.style.color="#28a745"; }
         };
-        
-        ws.onmessage = (event) => {
-            if (statusElement) {
-                statusElement.remove();
+        ws.onmessage = (ev) => {
+            if (statusElement) statusElement.remove();
+            try {
+                const logData = JSON.parse(ev.data);
+                // display
+                appendLog(logData);
+            } catch(e) {
+                console.warn("Malformed WS log:", e);
             }
-            
-            const logData = JSON.parse(event.data);
-            
-            // Create structured log entry
+        };
+        ws.onclose = () => {
+            const el = document.createElement("div");
+            el.className = "log-entry ERROR";
+            el.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket disconnected. Please refresh.</span>`;
+            logsContainer.appendChild(el);
+        };
+        ws.onerror = () => {
+            const el = document.createElement("div");
+            el.className = "log-entry ERROR";
+            el.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket connection error.</span>`;
+            logsContainer.appendChild(el);
+        };
+
+        function appendLog(logData) {
             const logElement = document.createElement("div");
             logElement.className = "log-entry";
-            if (logData.level) {
-                logElement.classList.add(logData.level);
-            }
+            if (logData.level) logElement.classList.add(logData.level);
 
-            const time = new Date().toLocaleTimeString();
             const timeSpan = document.createElement("span");
             timeSpan.className = "log-time";
-            timeSpan.textContent = time;
+            timeSpan.textContent = new Date().toLocaleTimeString();
 
+            const svc = logData.service || 'unknown';
             const serviceSpan = document.createElement("span");
-            serviceSpan.className = `log-service service-${logData.service || 'unknown'}`;
-            serviceSpan.textContent = `[${logData.service || 'N/A'}]`;
+            serviceSpan.className = `log-service service-${svc}`;
+            serviceSpan.textContent = `[${svc}]`;
 
             const taskSpan = document.createElement("span");
             taskSpan.className = "log-task";
@@ -263,144 +222,300 @@
 
             const msgSpan = document.createElement("span");
             msgSpan.className = "log-message";
-            msgSpan.textContent = logData.message;
+            msgSpan.textContent = logData.message || '';
 
             logElement.append(timeSpan, serviceSpan, taskSpan, levelSpan, msgSpan);
             logsContainer.appendChild(logElement);
             logsContainer.scrollTop = logsContainer.scrollHeight;
-        };
-        
-        ws.onclose = () => {
-            const errorElement = document.createElement("div");
-            errorElement.className = "log-entry ERROR";
-            errorElement.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket disconnected. Please refresh.</span>`;
-            logsContainer.appendChild(errorElement);
-        };
-        ws.onerror = (error) => {
-            const errorElement = document.createElement("div");
-            errorElement.className = "log-entry ERROR";
-            errorElement.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket connection error.</span>`;
-            logsContainer.appendChild(errorElement);
-        };
+        }
 
-        // --- 2. Task Dashboard Polling ---
+        // Polling tasks
         setInterval(fetchTasks, 2000);
+        setInterval(fetchAmbiguous, 2500);
 
         async function fetchTasks() {
             try {
-                const response = await fetch("/ui/tasks");
-                const tasks = await response.json();
-                
+                const resp = await fetch("/ui/tasks");
+                const tasks = await resp.json();
                 if (!Array.isArray(tasks)) {
-                    tasksContainer.innerHTML = `<pre style="color: #dc3545;">Error loading tasks: ${tasks.error || 'Unknown error'}</pre>`;
+                    tasksContainer.innerHTML = `<pre style="color:#dc3545;">Error loading tasks: ${escapeHtml(tasks.error||'Unknown')}</pre>`;
                     return;
                 }
-                
-                tasksContainer.innerHTML = ""; // Clear old tasks
-                if (tasks.length === 0) {
-                    tasksContainer.innerHTML = `<pre style="color: #aaa;">No tasks submitted yet.</pre>`;
-                    return;
-                }
+                tasksContainer.innerHTML = "";
+                if (tasks.length === 0) { tasksContainer.innerHTML = `<pre style="color:#aaa;">No tasks submitted yet.</pre>`; return; }
 
-                // Sort tasks: Paused/Failed first
-                tasks.sort((a, b) => {
-                    const statusA = a.status.toUpperCase();
-                    const statusB = b.status.toUpperCase();
-                    const isPausedA = statusA.includes("PAUSED") || statusA.includes("REJECTED") || statusA.includes("FAILED");
-                    const isPausedB = statusB.includes("PAUSED") || statusB.includes("REJECTED") || statusB.includes("FAILED");
-
-                    if (isPausedA && !isPausedB) return -1;
-                    if (!isPausedA && isPausedB) return 1;
-                    return 0;
+                // sort paused/failed first
+                tasks.sort((a,b) => {
+                    const sA = (a.status||"").toUpperCase();
+                    const sB = (b.status||"").toUpperCase();
+                    const pA = (sA.includes("PAUSED")||sA.includes("REJECTED")||sA.includes("FAILED")) ? 0 : 1;
+                    const pB = (sB.includes("PAUSED")||sB.includes("REJECTED")||sB.includes("FAILED")) ? 0 : 1;
+                    return pA - pB;
                 });
 
-                tasks.forEach(task => {
-                    tasksContainer.appendChild(createTaskCard(task));
-                });
-
-            } catch (error) {
-                tasksContainer.innerHTML = `<pre style="color: #dc3545;">Failed to fetch tasks: ${error}</pre>`;
+                for (const t of tasks) tasksContainer.appendChild(createTaskCard(t));
+            } catch (err) {
+                tasksContainer.innerHTML = `<pre style="color:#dc3545;">Failed to fetch tasks: ${escapeHtml(err.message||String(err))}</pre>`;
             }
         }
 
-        // --- 3. createTaskCard (!!! UPDATED !!!) ---
         function createTaskCard(task) {
             const card = document.createElement("div");
             card.className = "task-card";
+            const statusClass = task.status && task.status.startsWith("EXECUTING_STEP") ? "EXECUTING_STEP" : (task.status||"");
 
-            const statusClass = task.status.startsWith("EXECUTING_STEP") ? "EXECUTING_STEP" : task.status;
-            
-            let buttons = "";
-            // Check if task is in a state that allows user action
-            if (task.status === "PAUSED_REVIEW" || task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED" || task.status === "FAILED") {
-                
-                let approveClass = "approve-go"; // Default to green
-                let approveText = "Approve/Resume";
-                
-                // If task FAILED or was REJECTED, button is blue and says "Retry"
-                if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
-                    approveClass = "approve-warn"; // New blue class
-                    approveText = "Retry/Resume";  // New text
-                }
-
-                buttons = `
-                    <p>
-                        <button class="${approveClass}" onclick="approveTask('${task.task_id}')">${approveText}</button>
-                        <button class="replan" onclick="replanTask('${task.task_id}')">Replan Task</button>
-                    </p>
-                `;
+            let buttonsHtml = "";
+            if (["PAUSED_REVIEW","PAUSED_DEVIATION","ACTION_REJECTED","REJECTED","FAILED"].includes(task.status)) {
+                let approveCls="approve-go", approveText="Approve/Resume";
+                if (["FAILED","REJECTED","ACTION_REJECTED"].includes(task.status)) { approveCls="approve-warn"; approveText="Retry/Resume"; }
+                buttonsHtml = `<p><button class="${approveCls}" onclick="approveTask('${task.task_id}')">${approveText}</button>
+                    <button class="replan" onclick="replanTask('${task.task_id}')">Replan Task</button></p>`;
             }
 
-            // Use the new .task-reason class for the reason
-            const reasonHtml = task.reason ? `<p class="task-reason">Reason: ${task.reason}</p>` : "";
-
-            // Check for and render the detailed observation
-            const details = task.deviation_details;
+            const reasonHtml = task.reason ? `<p class="task-reason">Reason: ${escapeHtml(task.reason)}</p>` : "";
             let detailsHtml = "";
-            if (details && details.observation) {
-                // Escape HTML to prevent XSS
-                const safeObservation = document.createElement("div");
-                safeObservation.innerText = details.observation;
-                detailsHtml = `<pre class="deviation-details">Context: ${safeObservation.innerHTML}</pre>`;
-            
-            } else if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
-                 // Show box even if no details, to be consistent
-                 detailsHtml = `<pre class="deviation-details">Context: No specific details provided.</pre>`;
-            }
+            if (task.deviation_details && task.deviation_details.observation) detailsHtml = `<pre class="deviation-details">Context: ${escapeHtml(task.deviation_details.observation)}</pre>`;
+            else if (["FAILED","REJECTED","ACTION_REJECTED"].includes(task.status)) detailsHtml = `<pre class="deviation-details">Context: No specific details provided.</pre>`;
 
-            card.innerHTML = `
-                <h3>${task.goal}</h3>
-                <p class="task-id">${task.task_id}</p>
-                <p>Status: <span class="task-status ${statusClass}">${task.status}</span></p>
+            card.innerHTML = `<h3>${escapeHtml(task.goal||"No goal")}</h3>
+                <p class="task-id">${escapeHtml(task.task_id||"N/A")}</p>
+                <p>Status: <span class="task-status ${statusClass}">${escapeHtml(task.status||"N/A")}</span></p>
                 ${reasonHtml}
-                ${detailsHtml} ${buttons}
-            `;
+                ${detailsHtml}
+                ${buttonsHtml}`;
             return card;
         }
 
-        // --- 4. UI Action Handlers ---
         async function approveTask(taskId) {
-            console.log(`Approving ${taskId}...`);
-            await fetch(`/ui/approve_task/${taskId}`, { method: "POST" });
-            fetchTasks(); // Refresh list immediately
+            try {
+                await fetch(`/ui/approve_task/${encodeURIComponent(taskId)}`, { method:"POST" });
+                fetchTasks();
+            } catch (err) { alert("Approve failed: "+(err.message||err)); }
         }
 
         async function replanTask(taskId) {
-            console.log(`Replanning ${taskId}...`);
             const newGoal = prompt("Enter the new goal for this task:", "Fix the deviation and complete the original goal.");
-            
-            if (!newGoal) return; // User cancelled
-
-            await fetch(`/ui/replan_task/${taskId}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ goal: newGoal, context: { user: "operator", reason: "Manual replan" } })
-            });
-            fetchTasks(); // Refresh list immediately
+            if (!newGoal) return;
+            try {
+                await fetch(`/ui/replan_task/${encodeURIComponent(taskId)}`, {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ goal:newGoal, context:{ user:"operator", reason:"Manual replan" } })
+                });
+                fetchTasks();
+            } catch (err) { alert("Replan failed: "+(err.message||err)); }
         }
 
-        // Initial fetch
+        // --- Ambiguous panel logic with pending-time + filtering/sorting ---
+        function refreshAmbiguousNow(){ fetchAmbiguous(true); }
+
+        async function fetchAmbiguous(forceRefresh=false) {
+            try {
+                const resp = await fetch("/ui/ambiguous");
+                const data = await resp.json();
+                const list = Array.isArray(data.ambiguous) ? data.ambiguous : [];
+                // update local cache and firstSeenMap
+                // build set of available services for filter dropdown
+                let seenServices = new Set();
+                for (const item of list) {
+                    const uid = ambiguousUid(item);
+                    if (!firstSeenMap.has(uid) || forceRefresh) {
+                        firstSeenMap.set(uid, nowMs());
+                    }
+                    const svc = (item.service || (item.context && item.context.service) || 'unknown');
+                    seenServices.add(svc);
+                }
+
+                // update filter dropdown (keep current selection if possible)
+                updateServiceFilter([...seenServices]);
+
+                ambiguousCache = list.slice(); // shallow copy
+
+                renderAmbiguous();
+            } catch (err) {
+                ambiguousContainer.innerHTML = `<pre style="color:#dc3545;">Failed to fetch ambiguous list: ${escapeHtml(err.message||String(err))}</pre>`;
+            }
+        }
+
+        function updateServiceFilter(services) {
+            // combine with already-known services
+            services.forEach(s=>serviceSet.add(s));
+            // rebuild dropdown while preserving selection
+            const prev = filterServiceEl.value || "all";
+            filterServiceEl.innerHTML = `<option value="all">All</option>`;
+            Array.from(serviceSet).sort().forEach(s => {
+                const opt = document.createElement("option");
+                opt.value = s; opt.textContent = s;
+                filterServiceEl.appendChild(opt);
+            });
+            if ([...filterServiceEl.options].some(o=>o.value===prev)) filterServiceEl.value = prev;
+        }
+
+        function ambiguousUid(item) {
+            // Use task_id + message + service as a best-effort unique ID
+            const tid = item.task_id || (item.context && item.context.task_id) || "";
+            const msg = item.message || (item.context && item.context.reason) || JSON.stringify(item.context||{});
+            const svc = item.service || (item.context && item.context.service) || "unknown";
+            return `${svc}::${tid}::${hashCode(String(msg)).toString(36)}`;
+        }
+
+        function hashCode(str) {
+            var h=0; for (var i=0;i<str.length;i++){ h = ((h<<5)-h)+str.charCodeAt(i); h |= 0; } return h;
+        }
+
+        function renderAmbiguous() {
+            // apply filter and sort
+            let items = ambiguousCache.slice();
+            const filterService = filterServiceEl.value || "all";
+            const minScore = parseFloat(minScoreEl.value) || 0.0;
+            // map items to enriched objects with extracted score and uid
+            const enriched = items.map(it => {
+                const uid = ambiguousUid(it);
+                // score may live at context.score or context.policy_score or context.similarity
+                let score = null;
+                if (it.context && typeof it.context.score === "number") score = it.context.score;
+                else if (it.context && typeof it.context.policy_score === "number") score = it.context.policy_score;
+                else if (it.context && typeof it.context.similarity === "number") score = it.context.similarity;
+                else {
+                    // attempt to parse numeric from message
+                    const m = String(it.message||"").match(/score[:=]?\s*([0-9]*\.?[0-9]+)/i);
+                    if (m) score = parseFloat(m[1]);
+                }
+                if (score === null || isNaN(score)) score = 0.0;
+                const svc = it.service || (it.context && it.context.service) || 'unknown';
+                return { raw: it, uid: uid, score: score, svc: svc, firstSeen: firstSeenMap.get(uid) || nowMs() };
+            });
+
+            // filter
+            let filtered = enriched.filter(e => (filterService==='all' || e.svc === filterService) && (e.score >= minScore));
+
+            // sort
+            const sortMode = sortModeEl.value || "newest";
+            if (sortMode === "newest") filtered.sort((a,b) => (b.firstSeen - a.firstSeen));
+            else if (sortMode === "oldest") filtered.sort((a,b) => (a.firstSeen - b.firstSeen));
+            else if (sortMode === "score_desc") filtered.sort((a,b) => (b.score - a.score));
+            else if (sortMode === "score_asc") filtered.sort((a,b) => (a.score - b.score));
+
+            ambiguousContainer.innerHTML = "";
+            if (filtered.length === 0) {
+                ambiguousContainer.innerHTML = `<pre style="color:#aaa;">No ambiguous decisions requiring human review (match filters)</pre>`;
+                return;
+            }
+            for (const e of filtered) ambiguousContainer.appendChild(createAmbiguousItem(e));
+        }
+
+        function createAmbiguousItem(enriched) {
+            const entry = enriched.raw;
+            const wrapper = document.createElement("div");
+            wrapper.className = "ambiguous-item";
+
+            const taskId = entry.task_id || (entry.context && entry.context.task_id) || "N/A";
+            const reason = (entry.context && entry.context.reason) || entry.message || (entry.context && entry.context.decision) || "Ambiguous decision";
+            const score = enriched.score;
+            const evidence = entry.context && entry.context.details ? JSON.stringify(entry.context.details, null, 2) : (entry.context && entry.context.evidence ? JSON.stringify(entry.context.evidence, null, 2) : "");
+            const svc = enriched.svc || 'unknown';
+
+            // header meta: service, task, pending badge, score badge
+            const meta = document.createElement("div");
+            meta.className = "ambiguous-meta";
+            meta.innerHTML = `<strong style="color:#fff">${escapeHtml(svc)}</strong> · task: <span style="font-family:monospace">${escapeHtml(taskId)}</span>`;
+
+            const badgePending = document.createElement("span");
+            badgePending.className = "badge-pending";
+            const uid = enriched.uid;
+            const firstSeen = enriched.firstSeen || nowMs();
+            // set label immediate
+            badgePending.textContent = formatElapsed(nowMs() - firstSeen);
+            badgePending.dataset.uid = uid;
+            meta.appendChild(badgePending);
+
+            const scoreBadge = document.createElement("span");
+            scoreBadge.className = "badge-pending";
+            scoreBadge.style.background = "#222";
+            scoreBadge.style.border = "1px solid #3a3a3a";
+            scoreBadge.textContent = `score: ${score.toFixed(2)}`;
+            meta.appendChild(scoreBadge);
+
+            const r = document.createElement("div");
+            r.className = "ambiguous-reason";
+            r.textContent = `${reason}`;
+
+            const ev = document.createElement("pre");
+            ev.className = "ambiguous-evidence";
+            ev.textContent = evidence || "No detailed evidence";
+
+            // controls
+            const controls = document.createElement("div");
+            controls.className = "row";
+            const approverInput = document.createElement("input");
+            approverInput.placeholder = "Your name (approved_by)";
+            approverInput.className = "small-input";
+            const noteInput = document.createElement("input");
+            noteInput.placeholder = "Note (optional)";
+            noteInput.className = "small-input";
+
+            const allowBtn = document.createElement("button");
+            allowBtn.className = "approve-go";
+            allowBtn.textContent = "Allow & Resume";
+            allowBtn.onclick = () => resolveAmbiguous(taskId, "Allow", approverInput.value || "operator", noteInput.value || "", entry);
+
+            const denyBtn = document.createElement("button");
+            denyBtn.className = "replan";
+            denyBtn.textContent = "Deny";
+            denyBtn.onclick = () => { if (!confirm("Are you sure you want to DENY this ambiguous action/plan?")) return; resolveAmbiguous(taskId, "Deny", approverInput.value || "operator", noteInput.value || "", entry); };
+
+            controls.append(approverInput, noteInput, allowBtn, denyBtn);
+
+            wrapper.append(meta, r, ev, controls);
+            return wrapper;
+        }
+
+        // update all pending badges every 10s
+        setInterval(() => {
+            document.querySelectorAll(".badge-pending").forEach(el => {
+                const uid = el.dataset.uid;
+                if (!uid) return;
+                const first = firstSeenMap.get(uid) || nowMs();
+                el.textContent = formatElapsed(nowMs() - first);
+            });
+        }, 10000);
+
+        async function resolveAmbiguous(taskId, decision, approvedBy, note, entry) {
+            try {
+                const resp = await fetch(`/ui/resolve_ambiguous/${encodeURIComponent(taskId)}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ decision: decision, approved_by: approvedBy, note: note })
+                });
+                const result = await resp.json();
+                if (result && result.error) { alert("Resolve failed: " + result.error); return; }
+
+                // remove from firstSeenMap to avoid stale badges
+                // best-effort: remove UIDs that match taskId
+                for (const k of Array.from(firstSeenMap.keys())) if (k.includes(`::${taskId}::`)) firstSeenMap.delete(k);
+
+                // refresh UI
+                fetchAmbiguous(true);
+                fetchTasks();
+
+                // If allowed, try to resume task
+                if (decision === "Allow") {
+                    try { await fetch(`/ui/approve_task/${encodeURIComponent(taskId)}`, { method:"POST" }); setTimeout(fetchTasks, 800); } catch(e){ console.warn("Manager approve proxy failed:", e); }
+                }
+                alert(`Recorded decision=${decision} for task ${taskId}`);
+            } catch (err) {
+                alert("Failed to resolve ambiguous: " + (err.message || String(err)));
+            }
+        }
+
+        // initial load & connections
         fetchTasks();
+        fetchAmbiguous();
+
+        // re-render when filters change
+        filterServiceEl.addEventListener("change", renderAmbiguous);
+        sortModeEl.addEventListener("change", renderAmbiguous);
+        minScoreEl.addEventListener("input", () => { setTimeout(renderAmbiguous, 200); });
+
     </script>
 </body>
 </html>

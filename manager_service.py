@@ -1,4 +1,4 @@
-# 📄 manager_service.py
+# manager_service.py
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 import uvicorn
@@ -8,8 +8,7 @@ import time
 import uuid
 from security import get_api_key
 
-# --- NEW: Gemini Client Setup ---
-from gemini_client import get_model, generate_json
+from gemini_client import get_model, generate_json, generate_json_safe
 import json
 
 MANAGER_SYSTEM_PROMPT = """
@@ -17,96 +16,80 @@ You are the "Manager," an AI team lead for the SHIVA agent system.
 Your job is to take a high-level "goal" from a user and break it down into a 
 clear, logical, step-by-step plan.
 
-You must respond ONLY with a JSON object with two keys:
-1. "plan_id": A unique string, (e.g., "plan-" + a few random chars).
-2. "steps": A list of objects. Each object must have:
-    - "step_id": An integer (1, 2, 3...).
-    - "goal": A string describing the specific, actionable goal for that step.
-
-The plan should be detailed and actionable for a worker agent.
+You must respond ONLY with a JSON object with keys:
+1. "plan_id": A unique string
+2. "steps": A list of objects, each with "step_id" (int) and "goal" (string)
 """
 manager_model = get_model(system_instruction=MANAGER_SYSTEM_PROMPT)
-# --- End Gemini Client Setup ---
 
-# --- Authentication & Service Constants ---
 app = FastAPI(
     title="Manager Service",
     description="Orchestrator for SHIVA.",
     dependencies=[Depends(get_api_key)]
 )
+
 API_KEY = "mysecretapikey"
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = "http://localhost:8005"
 SERVICE_NAME = "manager-service"
 SERVICE_PORT = 8001
-# --- End Authentication & Service Constants ---
 
-# --- In-memory Task Database ---
 tasks_db = {}
-# ---
 
 class InvokeRequest(BaseModel):
     goal: str
     context: dict = {}
 
-# --- Mock Agent Function (No change) ---
+# Agent planning helper
 def use_agent(prompt: str, input_data: dict) -> dict:
-    """(UPDATED) AI-based planning using Gemini."""
-    print(f"[Manager] AI Agent called with prompt: {prompt}")
-
-    prompt_parts = [
-        f"User Prompt: {prompt}\n",
-        f"User Input: {json.dumps(input_data)}\n\n",
-        "Generate the JSON plan (plan_id, steps) for this goal."
-    ]
-    
-    plan = generate_json(manager_model, prompt_parts)
-
-    # Fallback in case of JSON error or unexpected output
-    if "error" in plan or "steps" not in plan or "plan_id" not in plan:
-        print(f"[Manager] AI planning failed: {plan.get('error', 'Invalid format')}")
-        # Return a safe, empty plan
+    try:
+        prompt_parts = [
+            f"User Prompt: {prompt}\n",
+            f"User Input: {json.dumps(input_data)}\n",
+            "Return ONLY JSON: {\"plan_id\":\"...\",\"steps\":[{\"step_id\":1,\"goal\":\"...\"}]}"
+        ]
+        plan = generate_json(manager_model, prompt_parts, max_retries=1)
+        if isinstance(plan, dict) and "steps" in plan and "plan_id" in plan:
+            return plan
+        # fallback safe
+        plan2 = generate_json_safe(manager_model, prompt_parts, max_retries=1)
+        if isinstance(plan2, dict) and "steps" in plan2 and "plan_id" in plan2:
+            return plan2
+        # safe fallback minimal plan
         return {
-            "plan_id": f"plan-fallback-{uuid.uuid4().hex[:4]}",
+            "plan_id": f"plan-fallback-{uuid.uuid4().hex[:6]}",
             "steps": [{"step_id": 1, "goal": f"Error: AI failed to generate plan for {input_data.get('goal')}"}]
         }
-    
-    return plan     
+    except Exception as e:
+        print(f"[Manager] use_agent exception: {e}")
+        return {
+            "plan_id": f"plan-fallback-{uuid.uuid4().hex[:6]}",
+            "steps": [{"step_id": 1, "goal": f"Error: AI failed to generate plan for {input_data.get('goal')}"}]
+        }
 
-# --- Service Discovery & Logging (No change) ---
 async def discover(client: httpx.AsyncClient, service_name: str) -> str:
-    print(f"[Manager] Discovering: {service_name}")
     try:
-        r = await client.get(
-            f"{DIRECTORY_URL}/discover",
-            params={"service_name": service_name},
-            headers=AUTH_HEADER
-        )
+        r = await client.get(f"{DIRECTORY_URL}/discover", params={"service_name": service_name}, headers=AUTH_HEADER)
         r.raise_for_status()
-        url = r.json()["url"]
-        print(f"[Manager] Discovered {service_name} at {url}")
-        return url
-    except httpx.RequestError as e:
-        print(f"[Manager] FAILED to connect to Directory at {DIRECTORY_URL}: {e}")
-        raise HTTPException(500, detail=f"Could not connect to Directory Service: {e}")
-    except httpx.HTTPStatusError as e:
-        print(f"[Manager] FAILED to discover {service_name}. Directory response: {e.response.text}")
-        raise HTTPException(500, detail=f"Could not discover {service_name}: {e.response.text}")
+        return r.json()["url"]
+    except Exception as e:
+        print(f"[Manager] discover failed for {service_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not discover {service_name}: {e}")
 
 async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
     try:
         overseer_url = await discover(client, "overseer-service")
         await client.post(f"{overseer_url}/log/event", json={
-            "service": "manager-service",
+            "service": SERVICE_NAME,
             "task_id": task_id,
             "level": level,
             "message": message,
             "context": context
         }, headers=AUTH_HEADER)
     except Exception as e:
-        print(f"[Manager] FAILED to log to Overseer: {e}")
+        print(f"[Manager] Failed to log to Overseer: {e}")
 
-# --- Service Registration (No change) ---
+# registration
 def register_self():
     while True:
         try:
@@ -115,15 +98,14 @@ def register_self():
                 "service_url": f"http://localhost:{SERVICE_PORT}",
                 "ttl_seconds": 60
             }, headers=AUTH_HEADER)
-            
             if r.status_code == 200:
-                print(f"[Manager] Successfully registered with Directory at {DIRECTORY_URL}")
+                print("[Manager] Registered with Directory")
                 threading.Thread(target=heartbeat, daemon=True).start()
                 break
             else:
-                print(f"[Manager] Failed to register. Status: {r.status_code}. Retrying in 5s...")
-        except httpx.RequestError:
-            print(f"[Manager] Could not connect to Directory. Retrying in 5s...")
+                print("[Manager] registration failed, retrying...")
+        except Exception:
+            print("[Manager] Could not connect to Directory, retrying...")
         time.sleep(5)
 
 def heartbeat():
@@ -135,9 +117,7 @@ def heartbeat():
                 "service_url": f"http://localhost:{SERVICE_PORT}",
                 "ttl_seconds": 60
             }, headers=AUTH_HEADER)
-            print("[Manager] Heartbeat sent to Directory.")
-        except httpx.RequestError:
-            print("[Manager] Failed to send heartbeat. Will retry registration.")
+        except Exception:
             register_self()
             break
 
@@ -145,16 +125,15 @@ def heartbeat():
 def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
 
-# --- Multi-Step Execution Logic (!!! UPDATED !!!) ---
+# Execution logic
 async def execute_plan_from_step(task_id: str, step_index: int):
     task = tasks_db.get(task_id)
     if not task:
-        print(f"[Manager] Task {task_id} not found for execution.")
+        print(f"[Manager] Task {task_id} not found")
         return
-
-    plan = task.get("plan")
-    if not plan or not plan.get("steps"):
-        print(f"[Manager] No plan for task {task_id}.")
+    plan = task.get("plan", {})
+    if not plan.get("steps"):
+        print(f"[Manager] No steps for {task_id}")
         return
 
     async with httpx.AsyncClient(timeout=300.0) as client:
@@ -162,7 +141,6 @@ async def execute_plan_from_step(task_id: str, step_index: int):
             for i in range(step_index, len(plan["steps"])):
                 task["current_step_index"] = i
                 step = plan["steps"][i]
-                
                 task["status"] = f"EXECUTING_STEP_{i+1}: {step['goal']}"
                 await log_to_overseer(client, task_id, "INFO", f"Executing step {i+1}: {step['goal']}")
 
@@ -172,56 +150,48 @@ async def execute_plan_from_step(task_id: str, step_index: int):
                     "current_step_goal": step["goal"],
                     "approved_plan": plan,
                     "context": task.get("context", {})
-                }, headers=AUTH_HEADER)
-                
+                }, headers=AUTH_HEADER, timeout=300.0)
+
                 partner_result = p_resp.json()
-                await log_to_overseer(client, task_id, "INFO", f"Partner result: {partner_result.get('status')}", partner_result)
+                await log_to_overseer(client, task_id, "INFO", "Partner result", partner_result)
 
                 partner_status = partner_result.get("status")
 
                 if partner_status == "STEP_COMPLETED":
                     continue
-                
                 elif partner_status == "DEVIATION_DETECTED":
-                    await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task for manual review.")
+                    await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing.", partner_result)
                     task["status"] = "PAUSED_DEVIATION"
                     task["reason"] = partner_result.get("reason")
-                    # Save the detailed observation from the partner for the UI
-                    task["deviation_details"] = partner_result.get("details", {"observation": "No details provided."}) 
+                    task["deviation_details"] = partner_result.get("details", {"observation": "No details"})
                     return
-                
                 elif partner_status == "ACTION_REJECTED":
-                    await log_to_overseer(client, task_id, "ERROR", "Task REJECTED: Guardian denied a critical step.")
+                    await log_to_overseer(client, task_id, "ERROR", "Action rejected by Guardian", partner_result)
                     task["status"] = "REJECTED"
                     task["reason"] = partner_result.get("reason")
-                    # Save context for the UI
                     task["deviation_details"] = {"observation": f"Guardian rejection: {task['reason']}"}
                     return
-                
                 else:
-                    await log_to_overseer(client, task_id, "ERROR", "Task FAILED during partner execution.")
+                    await log_to_overseer(client, task_id, "ERROR", "Partner failed", partner_result)
                     task["status"] = "FAILED"
-                    task["reason"] = partner_result.get("reason", "Unknown partner failure")
-                    # Save context for the UI
+                    task["reason"] = partner_result.get("reason", "Unknown")
                     task["deviation_details"] = {"observation": f"Partner failed: {task['reason']}"}
                     return
 
-            await log_to_overseer(client, task_id, "INFO", "All steps completed. Task finished.")
+            await log_to_overseer(client, task_id, "INFO", "All steps completed")
             task["status"] = "COMPLETED"
-            task["result"] = "All plan steps executed successfully."
-
+            task["result"] = "All steps executed successfully."
         except Exception as e:
-            print(f"[Manager] Unhandled exception in execute_plan {task_id}: {e}")
+            print(f"[Manager] execute_plan error: {e}")
             try:
-                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
-            except: pass
+                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {e}")
+            except:
+                pass
             task["status"] = "FAILED"
             task["reason"] = str(e)
             task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
-# --- END UPDATED SECTION ---
 
-
-# --- Background Task Entry Point (No change) ---
+# Background runner
 async def run_task_background(task_id: str, request: InvokeRequest):
     task = tasks_db[task_id]
     task["status"] = "STARTING"
@@ -252,51 +222,89 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             task["status"] = "VALIDATING_PLAN"
             await log_to_overseer(client, task_id, "INFO", "Validating plan with Guardian...")
             guardian_url = await discover(client, "guardian-service")
-            g_resp = await client.post(f"{guardian_url}/guardian/validate_plan", json={
-                "task_id": task_id,
-                "plan": plan
-            }, headers=AUTH_HEADER)
-            
-            # Handle plan decision outcomes
-            if g_resp.status_code != 200:
-                error_text = g_resp.text[:200] if g_resp.text else "No response body"
-                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: HTTP {g_resp.status_code} - {error_text}")
-                task["status"] = "REJECTED"
-                task["reason"] = f"Plan validation failed: HTTP {g_resp.status_code}"
-                task["deviation_details"] = {"observation": task["reason"]}
-                return
 
-            # Parse JSON response with error handling
+            # --- NEW: tolerant handling of Guardian plan validation responses ---
             try:
-                decision_payload = g_resp.json()
-            except Exception as json_err:
-                error_text = g_resp.text[:200] if g_resp.text else "Empty response"
-                await log_to_overseer(client, task_id, "ERROR", f"Failed to parse Guardian response: {json_err} - Response: {error_text}")
-                task["status"] = "REJECTED"
-                task["reason"] = f"Guardian returned invalid JSON: {str(json_err)}"
-                task["deviation_details"] = {"observation": task["reason"]}
+                g_resp = await client.post(
+                    f"{guardian_url}/guardian/validate_plan",
+                    json={"task_id": task_id, "plan": plan},
+                    headers=AUTH_HEADER,
+                    timeout=20.0
+                )
+            except Exception as e:
+                # Network/connection error to Guardian -> fail-conservative to PAUSED_REVIEW
+                await log_to_overseer(client, task_id, "ERROR", f"Failed to call Guardian for plan validation: {e}")
+                task["status"] = "PAUSED_REVIEW"
+                task["reason"] = "Guardian unreachable; requires human review"
+                task["deviation_details"] = {"observation": str(e)}
                 return
 
-            decision = decision_payload.get("decision")
-            reason = decision_payload.get("reason", "Unknown reason")
+            # Try to parse JSON body safely, fall back to text for diagnostics
+            decision_payload = None
+            body_text = ""
+            try:
+                # httpx Response.json() can raise; handle carefully
+                decision_payload = g_resp.json()
+            except Exception:
+                try:
+                    raw = await g_resp.aread()
+                    body_text = raw.decode(errors="ignore")
+                except Exception:
+                    body_text = "<unreadable response body>"
+                await log_to_overseer(client, task_id, "WARN", "Guardian returned non-JSON response for plan validation", {"status_code": g_resp.status_code, "body_preview": body_text[:500]})
 
-            if decision == "Allow":
-                pass
-            elif decision == "Ambiguous":
-                await log_to_overseer(client, task_id, "WARN", f"Plan requires human review: {reason}", decision_payload)
+            # If HTTP 5xx from Guardian => treat as PAUSED_REVIEW (human triage)
+            if 500 <= g_resp.status_code < 600:
+                task["status"] = "PAUSED_REVIEW"
+                task["reason"] = "Guardian service error (5xx); requires human review"
+                task["deviation_details"] = {"observation": body_text or "Guardian 5xx response"}
+                await log_to_overseer(client, task_id, "ERROR", "Guardian service error (5xx) during plan validation", {"status_code": g_resp.status_code})
+                return
+
+            # If we couldn't parse JSON, fail to PAUSED_REVIEW to be safe
+            if not isinstance(decision_payload, dict):
+                task["status"] = "PAUSED_REVIEW"
+                task["reason"] = "Invalid response from Guardian; requires human review"
+                task["deviation_details"] = {"observation": (body_text or str(decision_payload))}
+                await log_to_overseer(client, task_id, "WARN", "Invalid/empty JSON from Guardian; paused for human review", {"status_code": g_resp.status_code, "body_preview": (body_text or "")[:500]})
+                return
+
+            # Now inspect the decision field
+            decision = decision_payload.get("decision")
+            reason = decision_payload.get("reason", "")
+            # Normalize decision names (be permissive)
+            if isinstance(decision, str):
+                decision_norm = decision.strip().capitalize()
+            else:
+                decision_norm = None
+
+            # Missing or unknown decision -> PAUSED_REVIEW
+            if decision_norm not in ("Allow", "Deny", "Ambiguous"):
+                task["status"] = "PAUSED_REVIEW"
+                task["reason"] = "Guardian returned unknown decision; requires human review"
+                task["deviation_details"] = {"observation": f"Invalid decision: {decision}", "raw": decision_payload}
+                await log_to_overseer(client, task_id, "WARN", "Guardian returned unknown decision value", {"decision": decision, "payload": decision_payload})
+                return
+
+            # Map decisions to manager states
+            if decision_norm == "Allow":
+                # Proceed normally
+                await log_to_overseer(client, task_id, "INFO", "Plan validation PASSED by Guardian.", {"reason": reason})
+            elif decision_norm == "Ambiguous":
+                # Pause for explicit human review
                 task["status"] = "PAUSED_REVIEW"
                 task["reason"] = f"Plan requires human review: {reason}"
-                task["deviation_details"] = {"observation": task["reason"]}
+                task["deviation_details"] = {"observation": task["reason"], "guardian_payload": decision_payload}
+                await log_to_overseer(client, task_id, "WARN", f"Plan requires human review per Guardian: {reason}", decision_payload)
                 return
-            else:
-                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", decision_payload)
+            else:  # "Deny"
                 task["status"] = "REJECTED"
                 task["reason"] = f"Plan validation failed: {reason}"
-                task["deviation_details"] = {"observation": f"Plan validation failed: {reason}"}
+                task["deviation_details"] = {"observation": task["reason"], "guardian_payload": decision_payload}
+                await log_to_overseer(client, task_id, "ERROR", f"Plan validation DENIED by Guardian: {reason}", decision_payload)
                 return
-            
-            await log_to_overseer(client, task_id, "INFO", "Plan validation PASSED.")
-            
+            # --- END tolerant guardian handling ---
+
             if not plan.get("steps"):
                 await log_to_overseer(client, task_id, "WARN", "Plan has no steps. Task considered complete.")
                 task["status"] = "COMPLETED"
@@ -306,104 +314,67 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             await execute_plan_from_step(task_id, 0)
 
         except Exception as e:
-            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
-            print(f"[Manager] Unhandled exception in background task {task_id}: {error_msg}")
-            import traceback
-            traceback.print_exc()
+            print(f"[Manager] Unhandled exception in background task {task_id}: {e}")
             try:
-                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {error_msg}")
+                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
             except: pass
             task["status"] = "FAILED"
-            task["reason"] = error_msg
-            task["deviation_details"] = {"observation": f"Unhandled exception: {error_msg}"}
+            task["reason"] = str(e)
+            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
 
-# --- Public API Endpoints ---
-
+# Public endpoints
 @app.post("/invoke", status_code=202)
 async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
     task_id = f"task-{uuid.uuid4()}"
-    print(f"\n[Manager] === New Task Received ===\nTask ID: {task_id}\nGoal: {request.goal}\n")
-    
+    print(f"[Manager] New task {task_id} goal={request.goal}")
     tasks_db[task_id] = {
-        "status": "PENDING", 
-        "goal": request.goal, 
+        "status": "PENDING",
+        "goal": request.goal,
         "context": request.context,
         "current_step_index": 0,
-        "task_id": task_id # Add task_id to the object for easy reference
+        "task_id": task_id
     }
-    
     background_tasks.add_task(run_task_background, task_id, request)
-    
-    return {
-        "task_id": task_id, 
-        "status": "PENDING", 
-        "details": "Task accepted and is running in the background.",
-        "status_url": f"/task/{task_id}/status"
-    }
+    return {"task_id": task_id, "status": "PENDING", "status_url": f"/task/{task_id}/status"}
 
 @app.get("/task/{task_id}/status", status_code=200)
 def get_task_status(task_id: str):
     task = tasks_db.get(task_id)
     if not task:
-        raise HTTPException(404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 @app.post("/task/{task_id}/approve", status_code=202)
 async def approve_task(task_id: str, background_tasks: BackgroundTasks):
     task = tasks_db.get(task_id)
     if not task:
-        raise HTTPException(404, detail="Task not found")
-        
-    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED", "REJECTED", "FAILED"]:
-        raise HTTPException(400, detail=f"Task is not in a pausable/resumable state. Current status: {task['status']}")
-
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED", "REJECTED", "FAILED", "PAUSED_REVIEW"]:
+        raise HTTPException(status_code=400, detail=f"Task not pausable/resumable. status={task['status']}")
     step_to_resume = task.get("current_step_index", 0)
-    
-    print(f"[Manager] Resuming task {task_id} from step {step_to_resume + 1}")
-    
     task["status"] = "RESUMING"
-    task["reason"] = "Resumed by user approval."
-    
+    task["reason"] = "Resumed by user"
     background_tasks.add_task(execute_plan_from_step, task_id, step_to_resume)
-    
-    return {
-        "task_id": task_id, 
-        "status": "RESUMING",
-        "details": f"Task resuming execution from step {step_to_resume + 1}."
-    }
+    return {"task_id": task_id, "status": "RESUMING", "details": f"Resuming from step {step_to_resume+1}"}
 
 @app.post("/task/{task_id}/replan", status_code=202)
 async def replan_task(task_id: str, request: InvokeRequest, background_tasks: BackgroundTasks):
     task = tasks_db.get(task_id)
     if not task:
-        raise HTTPException(404, detail="Task not found")
-
-    print(f"[Manager] Replanning task {task_id} with new goal: {request.goal}")
-
+        raise HTTPException(status_code=404, detail="Task not found")
     task["status"] = "REPLANNING"
     task["goal"] = request.goal
     task["context"] = request.context
     task["plan"] = {}
     task["current_step_index"] = 0
-    task["reason"] = "Replanning triggered by user."
-    
+    task["reason"] = "Replanning triggered"
     background_tasks.add_task(run_task_background, task_id, request)
+    return {"task_id": task_id, "status": "REPLANNING", "details": "Replanning initiated"}
 
-    return {
-        "task_id": task_id, 
-        "status": "REPLANNING",
-        "details": "Task replanning initiated with new goal."
-    }
-
-# --- NEW: Endpoint for UI ---
 @app.get("/tasks/list", status_code=200)
 def get_all_tasks():
-    """Get the full list of all task objects in the DB."""
-    # Convert dict to a list of its values
     return list(tasks_db.values())
-# --- END NEW Endpoint ---
-
 
 if __name__ == "__main__":
-    print("Starting Manager Service on port 8001...")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    print(f"Starting Manager Service on port {SERVICE_PORT}...")
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)

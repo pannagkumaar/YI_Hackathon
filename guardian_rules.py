@@ -1,4 +1,3 @@
-# guardian_rules.py
 """
 Deterministic + lightweight-semantic Guardian rule engine.
 
@@ -18,6 +17,8 @@ from __future__ import annotations
 import ast
 import re
 from typing import Any, Dict, List, Tuple
+import unicodedata
+
 
 # ---------------------------------------------------------------------------
 # Configuration (tuneable)
@@ -130,6 +131,54 @@ def _try_jsonschema(obj: dict, schema: dict) -> Tuple[bool, str]:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_LEETS = str.maketrans({
+    '0': 'o',
+    '1': 'i',
+    '2': 'r',  # optional, sometimes used
+    '3': 'e',
+    '4': 'a',
+    '5': 's',
+    '6': 'g',
+    '7': 't',
+    '@': 'a',
+    '$': 's',
+    '+': 't'
+})
+# Zero-width characters we aggressively strip before deobfuscation
+_ZERO_WIDTH = ['\u200b', '\u200c', '\u200d', '\ufeff']
+_IMPERATIVE_VERBS = [
+    'execute','run','delete','remove','shutdown','restart','format','wipe','purge','drop','erase','kill'
+]
+
+def _remove_zero_width(s: str) -> str:
+    for ch in _ZERO_WIDTH:
+        s = s.replace(ch, '')
+    return s
+
+def _strip_control_chars(s: str) -> str:
+    return ''.join(ch for ch in s if unicodedata.category(ch)[0] != 'C')
+
+def _deobfuscate_leet(s: str) -> str:
+    """
+    Lowercase, map common leet/digit substitutions and collapse non-word runs.
+    Returns a cleaned string suitable for token-based matching.
+    """
+    if not s:
+        return ""
+    # normalize lowercase and apply mapping
+    s1 = s.lower().translate(_LEETS)
+    # replace non-word characters with spaces and collapse repeats
+    s1 = re.sub(r'[\W_]+', ' ', s1)
+    s1 = re.sub(r'\s+', ' ', s1).strip()
+    return s1
+
+def _instruction_density(s: str) -> float:
+    toks = [t for t in re.findall(r"\w+", s.lower())]
+    if not toks:
+        return 0.0
+    hits = sum(1 for t in toks if t in _IMPERATIVE_VERBS)
+    return hits / len(toks)
+
 def canonicalize_text(text: str) -> str:
     """Lowercase, replace synonyms, collapse whitespace deterministically."""
 
@@ -169,19 +218,138 @@ def is_interrogative(text: str) -> bool:
     return any(t.startswith(s) for s in starters)
 
 
-def detect_injection(text: str) -> Tuple[bool, List[str]]:
-    """Return True + hits list if injection-like phrases exist."""
-
+def detect_injection(text: str) -> Tuple[bool, List[str], float]:
+    """
+    Return (is_injection, hits, score)
+    - Robust to zero-width masking, leet/digit obfuscation, spaced/collapsed obfuscation.
+    - Produces a list of hits and a float score in [0,1].
+    """
     if not text:
-        return False, []
+        return False, [], 0.0
+
+    original = text
+
+    # 1) strip zero-width and control characters first (critical for masked tokens)
+    t = _remove_zero_width(original)
+    t = _strip_control_chars(t)
+
+    # 2) produce multiple normalized variants
+    deob_leet = _deobfuscate_leet(t)                # leet mapped, punctuation removed
+    # additional digit->letter pass (extra safety)
+    digit_map = str.maketrans({'1': 'i', '0': 'o', '3': 'e', '4': 'a', '5': 's', '7': 't'})
+    deob_digits = deob_leet.translate(digit_map)
+
+    # collapsed (no spaces/punctuation) form to catch zero-width / punctuation obfuscation
+    collapsed = re.sub(r'[\W_]+', '', deob_digits or "")
+
+    # cleaned original (only whitespace normalized) for punctuation-based checks
+    original_clean = re.sub(r'\s+', ' ', original).strip()
+
     hits: List[str] = []
-    match = INJECTION_RX.search(text)
-    if match:
-        hits.append(match.group(0))
-    lower_text = text.lower()
-    if "<script" in lower_text or "```system" in lower_text:
-        hits.append("code_fence_or_html")
-    return (len(hits) > 0), hits
+
+    # 3) direct injection regex matching (use deob_digits and collapsed)
+    m = INJECTION_RX.search(deob_digits) or INJECTION_RX.search(t) or INJECTION_RX.search(original)
+    if m:
+        hits.append(f"injection_pattern:{m.group(0).strip()}")
+
+    # 4) Hard deny regex checks across normalized variants
+    for rx in HARD_DENY_REGEX:
+        try:
+            if rx.search(deob_digits) or rx.search(deob_leet) or rx.search(t) or rx.search(original):
+                hits.append(f"hard_deny_regex:{rx.pattern}")
+        except Exception:
+            continue
+
+    # 4b) relaxed rm -rf detection (catch obfuscations like rM -rF /)
+    try:
+        if (re.search(r"r\s*m\W*\s*-?\s*r\W*\s*-?\s*f", deob_digits, re.I)
+            or re.search(r"r\W*m\W*-?r\W*-?f", deob_leet, re.I)
+            or re.search(r"rm\W*-?rf", original, re.I)
+            or re.search(r"rmrf", collapsed, re.I)):
+            if not any(h.startswith("hard_deny_regex") for h in hits):
+                hits.append("hard_deny_regex:rm-rf-relaxed")
+    except Exception:
+        pass
+
+    # 5) code fences / html / long code fence detection (original preserves markup fidelity)
+    if '```' in original:
+        hits.append('code_fence_or_html')
+    if '<script' in original.lower():
+        hits.append('code_fence_or_html')
+
+    # long code fence detection (lower threshold to catch long payloads)
+    codefence_match = re.search(r'```(.{40,})', original, re.S)
+    if codefence_match:
+        hits.append('long_code_fence')
+
+    # 6) robust role:system detection (works on deobfuscated text and collapsed)
+    if re.search(r"\brole\s*[:=]?\s*system\b", deob_digits, re.I) or re.search(r"youarenowrole", collapsed, re.I) or re.search(r"youarenowrole", deob_digits, re.I):
+        hits.append('role:system')
+
+    # 7) explicit ignore/forget detection (catch obfuscations: 1gn0re, ign0re, zero-width splits)
+    # Patterns to match:
+    #  - normal: "ignore previous instructions"
+    #  - collapsed: "ignorepreviousinstructions" or "ignoreprevious"
+    #  - obfuscated digits: "1gn0re previous"
+    # We check both tokenized and collapsed variants.
+    ignore_pattern_token = re.search(r"\b(ignore|ign0re|ign0r[e3]|1gn0re)\b\s*(previous|earlier)?\s*(instructions)?", deob_digits, re.I)
+    ignore_pattern_collapsed = re.search(r"(ignorepreviousinstructions|ignoreprevious|forgetpreviousinstructions|forgetprevious)", collapsed, re.I)
+    if ignore_pattern_token or ignore_pattern_collapsed:
+        hits.append("ignore_previous_instructions")
+
+    # 8) instruction density using deob_digits
+    instr_density = _instruction_density(deob_digits)
+    if instr_density > 0.08:
+        hits.append('imperative_density')
+
+    # 9) punctuation noise (use original to capture '!!!' etc.)
+    punct_ratio = sum(1 for ch in original if not ch.isalnum() and not ch.isspace()) / max(1, len(original))
+    if punct_ratio > 0.10:
+        hits.append('high_punctuation')
+
+    # Build a conservative score
+    score = 0.0
+
+    # Immediate deny if hard deny matched
+    if any(h.startswith('hard_deny_regex') for h in hits):
+        return True, hits, 1.0
+
+    if 'long_code_fence' in hits or 'code_fence_or_html' in hits:
+        score += 0.40
+
+    if 'role:system' in hits:
+        score += 0.35
+
+    if 'imperative_density' in hits:
+        score += min(0.35, instr_density * 4.0)
+
+    if 'high_punctuation' in hits:
+        score += 0.10
+
+    if any(h.startswith("injection_pattern") for h in hits) or INJECTION_RX.search(deob_digits) or INJECTION_RX.search(collapsed):
+        score += 0.35
+
+    if 'ignore_previous_instructions' in hits:
+        score += 0.35
+
+    score = max(0.0, min(1.0, score))
+
+    # Some combinations are treated as immediate injection-like
+    immediate_injection = False
+    if 'long_code_fence' in hits:
+        immediate_injection = True
+    if 'ignore_previous_instructions' in hits:
+        immediate_injection = True
+    if 'role:system' in hits:
+        immediate_injection = True
+    if 'imperative_density' in hits and 'high_punctuation' in hits:
+        immediate_injection = True
+
+    is_injection = immediate_injection or (score >= SEMANTIC_REVIEW_THRESHOLD)
+
+    return bool(is_injection), hits, float(round(score, 6))
+
+
 
 
 def hard_deny_match(text: str) -> Tuple[bool, List[str]]:
@@ -325,15 +493,27 @@ def deterministic_eval_action(
             "policy_score": 1.0,
         }
 
-    # 3. Injection patterns -> Deny
-    inj, inj_hits = detect_injection(proposed_action)
-    if inj:
+    # 3. Injection patterns -> use numeric score thresholds (less aggressive)
+    # detect_injection -> (is_injection: bool, hits: List[str], score: float)
+    inj, inj_hits, inj_score = detect_injection(proposed_action)
+    # Deny only at deny-threshold (very high confidence)
+    if inj_score >= SEMANTIC_DENY_THRESHOLD:
         return {
             "decision": "Deny",
-            "reason": f"Prompt-injection detected: {inj_hits}",
+            "reason": f"Prompt-injection detected (high_conf): {inj_hits}",
             "evidence": inj_hits,
-            "policy_score": 1.0,
+            "policy_score": inj_score,
         }
+    # Ambiguous (human review) only when in the review band
+    if inj_score >= SEMANTIC_REVIEW_THRESHOLD:
+        return {
+            "decision": "Ambiguous",
+            "reason": f"Prompt-injection suspected (review): {inj_hits}",
+            "evidence": inj_hits,
+            "policy_score": inj_score,
+            "requires_human_review": True
+        }
+    # If inj_score < SEMANTIC_REVIEW_THRESHOLD -> treat as non-actionable signal and continue checks
 
     # 4. Tool allowlist -> if unknown tool -> Ambiguous (ask LLM)
     action_name = parsed_action["action"]
@@ -388,9 +568,22 @@ def deterministic_eval_action(
     }
 
 
-def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[str, Any]:
-    """Deterministically evaluate a high-level execution plan."""
 
+def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str], llm_review_fn=None) -> Dict[str, Any]:
+    """
+    Deterministically evaluate a high-level execution plan.
+
+    Enhancements:
+    - Accepts optional llm_review_fn(callback) to make an LLM-assisted decision when a step
+      crosses the 'review' threshold (SEMANTIC_REVIEW_THRESHOLD) but is below the deny threshold.
+      The llm_review_fn should be a callable with signature:
+          llm_review_fn(task_id: str, plan_or_step: dict, policies: list) -> {"decision": "Allow"|"Deny"|"Ambiguous", "reason": str, ...}
+      If llm_review_fn is None or the call fails, the function falls back to Ambiguous (require human review).
+
+    - Keeps fail-closed semantics (hard deny -> Deny).
+    """
+
+    # Basic structural validation
     if not isinstance(plan, dict) or "steps" not in plan:
         return {
             "decision": "Deny",
@@ -399,6 +592,7 @@ def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[s
             "policy_score": 1.0,
         }
 
+    # Optional jsonschema validation (fail-closed on schema errors)
     ok, err = _try_jsonschema(plan, PLAN_SCHEMA)
     if not ok:
         return {
@@ -409,6 +603,7 @@ def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[s
         }
 
     steps = plan.get("steps", [])
+    # Plan too complex -> Deny (fail-closed)
     if len(steps) > 10:
         return {
             "decision": "Deny",
@@ -417,31 +612,100 @@ def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[s
             "policy_score": 1.0,
         }
 
-    policy_buckets = normalize_policies(policies)
+    # Normalize policies into buckets for fast checks
+    policy_buckets = normalize_policies(policies or [])
 
+    # Iterate steps and apply deterministic checks
     for step in steps:
         goal = step.get("goal", "")
         sid = step.get("step_id", "?")
 
+        # 1) Hard deny patterns (high-confidence destructive commands)
         hd, hd_hits = hard_deny_match(goal)
         if hd:
-            # Planning text with restricted terms should trigger human review
+            # For planning-level destructive language, prefer human review (Ambiguous),
+            # but treat explicit destructive matches as high risk and mark for review.
             return {
                 "decision": "Ambiguous",
-                "reason": f"Restricted term present in plan step {sid}",
+                "reason": f"Restricted/hard-deny term present in plan step {sid}",
                 "evidence": str(hd_hits),
-                "policy_score": 0.9,
+                "policy_score": 0.95,
+                "requires_human_review": True
             }
 
-        inj, inj_hits = detect_injection(goal)
-        if inj:
+        # 2) Prompt-injection detection
+        inj, inj_hits, inj_score = detect_injection(goal)
+
+        # If extremely high confidence of injection, deny immediately
+        if inj_score >= SEMANTIC_DENY_THRESHOLD:
             return {
-                "decision": "Ambiguous",
-                "reason": f"Injection-like text detected in plan step {sid}",
-                "evidence": str(inj_hits),
-                "policy_score": 0.9,
+                "decision": "Deny",
+                "reason": f"High-confidence prompt-injection detected in plan step {sid}",
+                "evidence": inj_hits,
+                "policy_score": float(inj_score),
             }
 
+        # If it crosses the review threshold, attempt LLM-assisted triage if available
+        if SEMANTIC_REVIEW_THRESHOLD <= inj_score < SEMANTIC_DENY_THRESHOLD:
+            # If caller provided an llm_review_fn, try it (best-effort).
+            if llm_review_fn:
+                try:
+                    # Provide the LLM with the full plan step and policies.
+                    # llm_review_fn is expected to return a dict with 'decision' and 'reason'.
+                    llm_resp = llm_review_fn(task_id=step.get("plan_task_id", "N/A"), plan={"step": step}, policies=policies)
+                    if isinstance(llm_resp, dict):
+                        llm_dec = llm_resp.get("decision")
+                        llm_reason = llm_resp.get("reason", "LLM-assisted review")
+                        llm_score = float(llm_resp.get("policy_score", inj_score))
+                        # Accept LLM Allow/Deny if valid
+                        if llm_dec == "Deny":
+                            return {
+                                "decision": "Deny",
+                                "reason": f"LLM-assisted deny for step {sid}: {llm_reason}",
+                                "evidence": inj_hits,
+                                "policy_score": llm_score
+                            }
+                        elif llm_dec == "Allow":
+                            # Continue to next step (treat as pass for this step)
+                            continue
+                        else:
+                            # LLM returned Ambiguous -> require human review
+                            return {
+                                "decision": "Ambiguous",
+                                "reason": f"LLM-assisted review inconclusive for step {sid}: {llm_reason}",
+                                "evidence": inj_hits,
+                                "policy_score": llm_score,
+                                "requires_human_review": True
+                            }
+                    else:
+                        # Non-dict response -> fall back to Ambiguous
+                        return {
+                            "decision": "Ambiguous",
+                            "reason": f"Prompt-injection suspected in plan step {sid}; requires human review (LLM returned invalid format)",
+                            "evidence": inj_hits,
+                            "policy_score": float(inj_score),
+                            "requires_human_review": True
+                        }
+                except Exception:
+                    # Best-effort only: if LLM call fails, require human review
+                    return {
+                        "decision": "Ambiguous",
+                        "reason": f"Prompt-injection suspected in plan step {sid}; LLM triage failed; requires human review",
+                        "evidence": inj_hits,
+                        "policy_score": float(inj_score),
+                        "requires_human_review": True
+                    }
+            else:
+                # No LLM available -> require human review
+                return {
+                    "decision": "Ambiguous",
+                    "reason": f"Prompt-injection suspected in plan step {sid}; requires human review",
+                    "evidence": inj_hits,
+                    "policy_score": float(inj_score),
+                    "requires_human_review": True
+                }
+
+        # 3) Exact substring policy matches (disallow entries)
         policy_hit, policy_terms = policy_disallow_substring(goal, policy_buckets)
         if policy_hit:
             return {
@@ -449,18 +713,21 @@ def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[s
                 "reason": f"Policy term {policy_terms} found in plan step {sid}",
                 "evidence": goal,
                 "policy_score": 0.9,
+                "requires_human_review": True
             }
 
-        # Lightweight semantic similarity for policy terms
+        # 4) Lightweight semantic similarity for policy terms
         sem_score = semantic_policy_score(goal, policy_buckets)
         if sem_score >= SEMANTIC_DENY_THRESHOLD:
             return {
                 "decision": "Ambiguous",
                 "reason": f"Plan step {sid} semantically similar to restricted policy",
                 "evidence": goal,
-                "policy_score": sem_score,
+                "policy_score": float(sem_score),
+                "requires_human_review": True
             }
 
+    # If we scanned all steps and found nothing to deny/review -> Allow
     return {
         "decision": "Allow",
         "reason": "Plan passes deterministic checks",
@@ -468,419 +735,37 @@ def deterministic_eval_plan(plan: Dict[str, Any], policies: List[str]) -> Dict[s
         "policy_score": 0.0,
     }
 
-# 📄 manager_service.py
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
-from pydantic import BaseModel
-import uvicorn
-import httpx
-import threading
-import time
-import uuid
-from security import get_api_key
-
-# --- NEW: Gemini Client Setup ---
-from gemini_client import get_model, generate_json
-import json
-
-MANAGER_SYSTEM_PROMPT = """
-You are the "Manager," an AI team lead for the SHIVA agent system.
-Your job is to take a high-level "goal" from a user and break it down into a 
-clear, logical, step-by-step plan.
-
-You must respond ONLY with a JSON object with two keys:
-1. "plan_id": A unique string, (e.g., "plan-" + a few random chars).
-2. "steps": A list of objects. Each object must have:
-    - "step_id": An integer (1, 2, 3...).
-    - "goal": A string describing the specific, actionable goal for that step.
-
-The plan should be detailed and actionable for a worker agent.
-"""
-manager_model = get_model(system_instruction=MANAGER_SYSTEM_PROMPT)
-# --- End Gemini Client Setup ---
-
-# --- Authentication & Service Constants ---
-app = FastAPI(
-    title="Manager Service",
-    description="Orchestrator for SHIVA.",
-    dependencies=[Depends(get_api_key)]
-)
-API_KEY = "mysecretapikey"
-AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "manager-service"
-SERVICE_PORT = 8001
-# --- End Authentication & Service Constants ---
-
-# --- In-memory Task Database ---
-tasks_db = {}
-# ---
-
-class InvokeRequest(BaseModel):
-    goal: str
-    context: dict = {}
-
-# --- Mock Agent Function (No change) ---
-def use_agent(prompt: str, input_data: dict) -> dict:
-    """(UPDATED) AI-based planning using Gemini."""
-    print(f"[Manager] AI Agent called with prompt: {prompt}")
-
-    prompt_parts = [
-        f"User Prompt: {prompt}\n",
-        f"User Input: {json.dumps(input_data)}\n\n",
-        "Generate the JSON plan (plan_id, steps) for this goal."
-    ]
-    
-    plan = generate_json(manager_model, prompt_parts)
-
-    # Fallback in case of JSON error or unexpected output
-    if "error" in plan or "steps" not in plan or "plan_id" not in plan:
-        print(f"[Manager] AI planning failed: {plan.get('error', 'Invalid format')}")
-        # Return a safe, empty plan
-        return {
-            "plan_id": f"plan-fallback-{uuid.uuid4().hex[:4]}",
-            "steps": [{"step_id": 1, "goal": f"Error: AI failed to generate plan for {input_data.get('goal')}"}]
-        }
-    
-    return plan     
-
-# --- Service Discovery & Logging (No change) ---
-async def discover(client: httpx.AsyncClient, service_name: str) -> str:
-    print(f"[Manager] Discovering: {service_name}")
-    try:
-        r = await client.get(
-            f"{DIRECTORY_URL}/discover",
-            params={"service_name": service_name},
-            headers=AUTH_HEADER
-        )
-        r.raise_for_status()
-        url = r.json()["url"]
-        print(f"[Manager] Discovered {service_name} at {url}")
-        return url
-    except httpx.RequestError as e:
-        print(f"[Manager] FAILED to connect to Directory at {DIRECTORY_URL}: {e}")
-        raise HTTPException(500, detail=f"Could not connect to Directory Service: {e}")
-    except httpx.HTTPStatusError as e:
-        print(f"[Manager] FAILED to discover {service_name}. Directory response: {e.response.text}")
-        raise HTTPException(500, detail=f"Could not discover {service_name}: {e.response.text}")
-
-async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
-    try:
-        overseer_url = await discover(client, "overseer-service")
-        await client.post(f"{overseer_url}/log/event", json={
-            "service": "manager-service",
-            "task_id": task_id,
-            "level": level,
-            "message": message,
-            "context": context
-        }, headers=AUTH_HEADER)
-    except Exception as e:
-        print(f"[Manager] FAILED to log to Overseer: {e}")
-
-# --- Service Registration (No change) ---
-def register_self():
-    while True:
-        try:
-            r = httpx.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
-            
-            if r.status_code == 200:
-                print(f"[Manager] Successfully registered with Directory at {DIRECTORY_URL}")
-                threading.Thread(target=heartbeat, daemon=True).start()
-                break
-            else:
-                print(f"[Manager] Failed to register. Status: {r.status_code}. Retrying in 5s...")
-        except httpx.RequestError:
-            print(f"[Manager] Could not connect to Directory. Retrying in 5s...")
-        time.sleep(5)
-
-def heartbeat():
-    while True:
-        time.sleep(45)
-        try:
-            httpx.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
-            print("[Manager] Heartbeat sent to Directory.")
-        except httpx.RequestError:
-            print("[Manager] Failed to send heartbeat. Will retry registration.")
-            register_self()
-            break
-
-@app.on_event("startup")
-def on_startup():
-    threading.Thread(target=register_self, daemon=True).start()
-
-# --- Multi-Step Execution Logic (!!! UPDATED !!!) ---
-async def execute_plan_from_step(task_id: str, step_index: int):
-    task = tasks_db.get(task_id)
-    if not task:
-        print(f"[Manager] Task {task_id} not found for execution.")
-        return
-
-    plan = task.get("plan")
-    if not plan or not plan.get("steps"):
-        print(f"[Manager] No plan for task {task_id}.")
-        return
-
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        try:
-            for i in range(step_index, len(plan["steps"])):
-                task["current_step_index"] = i
-                step = plan["steps"][i]
-                
-                task["status"] = f"EXECUTING_STEP_{i+1}: {step['goal']}"
-                await log_to_overseer(client, task_id, "INFO", f"Executing step {i+1}: {step['goal']}")
-
-                partner_url = await discover(client, "partner-service")
-                p_resp = await client.post(f"{partner_url}/partner/execute_goal", json={
-                    "task_id": task_id,
-                    "current_step_goal": step["goal"],
-                    "approved_plan": plan,
-                    "context": task.get("context", {})
-                }, headers=AUTH_HEADER)
-                
-                partner_result = p_resp.json()
-                await log_to_overseer(client, task_id, "INFO", f"Partner result: {partner_result.get('status')}", partner_result)
-
-                partner_status = partner_result.get("status")
-
-                if partner_status == "STEP_COMPLETED":
-                    continue
-                
-                elif partner_status == "DEVIATION_DETECTED":
-                    await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task for manual review.")
-                    task["status"] = "PAUSED_DEVIATION"
-                    task["reason"] = partner_result.get("reason")
-                    # Save the detailed observation from the partner for the UI
-                    task["deviation_details"] = partner_result.get("details", {"observation": "No details provided."}) 
-                    return
-                
-                elif partner_status == "ACTION_REJECTED":
-                    await log_to_overseer(client, task_id, "ERROR", "Task REJECTED: Guardian denied a critical step.")
-                    task["status"] = "REJECTED"
-                    task["reason"] = partner_result.get("reason")
-                    # Save context for the UI
-                    task["deviation_details"] = {"observation": f"Guardian rejection: {task['reason']}"}
-                    return
-                
-                else:
-                    await log_to_overseer(client, task_id, "ERROR", "Task FAILED during partner execution.")
-                    task["status"] = "FAILED"
-                    task["reason"] = partner_result.get("reason", "Unknown partner failure")
-                    # Save context for the UI
-                    task["deviation_details"] = {"observation": f"Partner failed: {task['reason']}"}
-                    return
-
-            await log_to_overseer(client, task_id, "INFO", "All steps completed. Task finished.")
-            task["status"] = "COMPLETED"
-            task["result"] = "All plan steps executed successfully."
-
-        except Exception as e:
-            print(f"[Manager] Unhandled exception in execute_plan {task_id}: {e}")
-            try:
-                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
-            except: pass
-            task["status"] = "FAILED"
-            task["reason"] = str(e)
-            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
-# --- END UPDATED SECTION ---
 
 
-# --- Background Task Entry Point (No change) ---
-async def run_task_background(task_id: str, request: InvokeRequest):
-    task = tasks_db[task_id]
-    task["status"] = "STARTING"
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            await log_to_overseer(client, task_id, "INFO", f"Task started: {request.goal}")
-            
-            task["status"] = "CHECKING_HALT"
-            overseer_url = await discover(client, "overseer-service")
-            status_resp = await client.get(f"{overseer_url}/control/status", headers=AUTH_HEADER)
-            
-            if status_resp.json().get("status") == "HALT":
-                await log_to_overseer(client, task_id, "ERROR", "Task rejected: System is in HALT state.")
-                task["status"] = "REJECTED"
-                task["reason"] = "System is in HALT state"
-                task["deviation_details"] = {"observation": "Task rejected: System is in HALT state"}
-                return
+# ---------------------------------------------------------------------------
+# Extra public helpers required by other modules
+# ---------------------------------------------------------------------------
 
-            task["status"] = "PLANNING"
-            await log_to_overseer(client, task_id, "INFO", "Generating execution plan...")
-            plan_input = {"change_id": task_id, "goal": request.goal, "context": request.context}
-            plan = use_agent("Create high-level plan for user goal", plan_input)
-            task["plan"] = plan
-            task["current_step_index"] = 0
-            await log_to_overseer(client, task_id, "INFO", f"Plan generated with {len(plan.get('steps', []))} steps.", plan)
-            
-            task["status"] = "VALIDATING_PLAN"
-            await log_to_overseer(client, task_id, "INFO", "Validating plan with Guardian...")
-            guardian_url = await discover(client, "guardian-service")
-            g_resp = await client.post(f"{guardian_url}/guardian/validate_plan", json={
-                "task_id": task_id, "plan": plan
-            }, headers=AUTH_HEADER)
-            
-            # Handle plan decision outcomes
-            if g_resp.status_code != 200:
-                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: HTTP {g_resp.status_code}")
-                task["status"] = "REJECTED"
-                task["reason"] = f"Plan validation failed: HTTP {g_resp.status_code}"
-                task["deviation_details"] = {"observation": task["reason"]}
-                return
-
-            decision_payload = g_resp.json()
-            decision = decision_payload.get("decision")
-            reason = decision_payload.get("reason", "Unknown reason")
-
-            if decision == "Allow":
-                pass
-            elif decision == "Ambiguous":
-                await log_to_overseer(client, task_id, "WARN", f"Plan requires human review: {reason}", decision_payload)
-                task["status"] = "PAUSED_REVIEW"
-                task["reason"] = f"Plan requires human review: {reason}"
-                task["deviation_details"] = {"observation": task["reason"]}
-                return
-            else:
-                await log_to_overseer(client, task_id, "ERROR", f"Plan validation FAILED: {reason}", decision_payload)
-                task["status"] = "REJECTED"
-                task["reason"] = f"Plan validation failed: {reason}"
-                task["deviation_details"] = {"observation": f"Plan validation failed: {reason}"}
-                return
-            
-            await log_to_overseer(client, task_id, "INFO", "Plan validation PASSED.")
-            
-            if not plan.get("steps"):
-                await log_to_overseer(client, task_id, "WARN", "Plan has no steps. Task considered complete.")
-                task["status"] = "COMPLETED"
-                task["result"] = "No steps to execute."
-                return
-                
-            await execute_plan_from_step(task_id, 0)
-
-        except Exception as e:
-            print(f"[Manager] Unhandled exception in background task {task_id}: {e}")
-            try:
-                await log_to_overseer(client, task_id, "ERROR", f"Unhandled exception: {str(e)}")
-            except: pass
-            task["status"] = "FAILED"
-            task["reason"] = str(e)
-            task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
-
-# --- Public API Endpoints ---
-
-@app.post("/invoke", status_code=202)
-async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
-    task_id = f"task-{uuid.uuid4()}"
-    print(f"\n[Manager] === New Task Received ===\nTask ID: {task_id}\nGoal: {request.goal}\n")
-    
-    tasks_db[task_id] = {
-        "status": "PENDING", 
-        "goal": request.goal, 
-        "context": request.context,
-        "current_step_index": 0,
-        "task_id": task_id # Add task_id to the object for easy reference
-    }
-    
-    background_tasks.add_task(run_task_background, task_id, request)
-    
-    return {
-        "task_id": task_id, 
-        "status": "PENDING", 
-        "details": "Task accepted and is running in the background.",
-        "status_url": f"/task/{task_id}/status"
-    }
-
-@app.get("/task/{task_id}/status", status_code=200)
-def get_task_status(task_id: str):
-    task = tasks_db.get(task_id)
-    if not task:
-        raise HTTPException(404, detail="Task not found")
-    return task
-
-@app.post("/task/{task_id}/approve", status_code=202)
-async def approve_task(task_id: str, background_tasks: BackgroundTasks):
-    task = tasks_db.get(task_id)
-    if not task:
-        raise HTTPException(404, detail="Task not found")
-        
-    if task["status"] not in ["PAUSED_DEVIATION", "ACTION_REJECTED", "REJECTED", "FAILED"]:
-        raise HTTPException(400, detail=f"Task is not in a pausable/resumable state. Current status: {task['status']}")
-
-    step_to_resume = task.get("current_step_index", 0)
-    
-    print(f"[Manager] Resuming task {task_id} from step {step_to_resume + 1}")
-    
-    task["status"] = "RESUMING"
-    task["reason"] = "Resumed by user approval."
-    
-    background_tasks.add_task(execute_plan_from_step, task_id, step_to_resume)
-    
-    return {
-        "task_id": task_id, 
-        "status": "RESUMING",
-        "details": f"Task resuming execution from step {step_to_resume + 1}."
-    }
-
-@app.post("/task/{task_id}/replan", status_code=202)
-async def replan_task(task_id: str, request: InvokeRequest, background_tasks: BackgroundTasks):
-    task = tasks_db.get(task_id)
-    if not task:
-        raise HTTPException(404, detail="Task not found")
-
-    print(f"[Manager] Replanning task {task_id} with new goal: {request.goal}")
-
-    task["status"] = "REPLANNING"
-    task["goal"] = request.goal
-    task["context"] = request.context
-    task["plan"] = {}
-    task["current_step_index"] = 0
-    task["reason"] = "Replanning triggered by user."
-    
-    background_tasks.add_task(run_task_background, task_id, request)
-
-    return {
-        "task_id": task_id, 
-        "status": "REPLANNING",
-        "details": "Task replanning initiated with new goal."
-    }
-
-# --- NEW: Endpoint for UI ---
-@app.get("/tasks/list", status_code=200)
-def get_all_tasks():
-    """Get the full list of all task objects in the DB."""
-    # Convert dict to a list of its values
-    return list(tasks_db.values())
-# --- END NEW Endpoint ---
-
-
-
-def action_matches_plan_score(action_text: str, plan: dict) -> Tuple[float, int]:
+def _plan_match_score(action_text: str, plan: Dict[str, Any]) -> Tuple[float, int]:
     """
-    Return (best_score, best_step_id) matching action_text to any plan goal.
-    Score uses token_overlap_score (0.0-1.0). If no plan or steps, returns (0.0, -1).
+    Internal helper: returns (best_score, best_step_id)
+    using token_overlap_score between action_text and each step.goal.
     """
     if not isinstance(plan, dict):
         return 0.0, -1
     steps = plan.get("steps", []) or []
-    best_score = 0.0
-    best_step_id = -1
+    best = 0.0
+    best_id = -1
     for s in steps:
-        goal = s.get("goal", "")
-        sid = s.get("step_id", -1)
-        score = token_overlap_score(action_text, goal)
-        if score > best_score:
-            best_score = score
-            best_step_id = sid
-    return best_score, best_step_id
+        g = s.get("goal", "")
+        score = token_overlap_score(action_text, g)
+        if score > best:
+            best = score
+            best_id = s.get("step_id", -1)
+    return best, best_id
 
 
+def action_matches_plan_score(action_text: str, plan: Dict[str, Any]) -> float:
+    """
+    Public helper for other services:
+    Returns the best token-overlap score (0.0 - 1.0) between action_text and any step in plan.
 
-if __name__ == "__main__":
-    print("Starting Manager Service on port 8001...")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    This is a thin wrapper around the internal _plan_match_score for convenience.
+    """
+    best_score, best_step = _plan_match_score(action_text, plan)
+    return float(best_score)

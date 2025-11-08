@@ -1,7 +1,125 @@
-.env
-*.pdf
-*.sh
+# ============================================
+#  SHIVA Multi-Agent Platform - .gitignore
+# ============================================
+
+# ---- Python cache / build files ----
 __pycache__/
-*.log
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+MANIFEST
+
+# ---- Virtual environments ----
 venv/
-YI_Hackathon/resource_hub/__pycache__
+.env/
+.env.bak/
+.shiva_env/
+shiva_env/
+*.venv/
+*.virtualenv/
+
+# ---- Environment / secrets ----
+.env
+.env.local
+.env.dev
+.env.prod
+.env.test
+.env_installed
+*.secret
+*.key
+*.pem
+
+# ---- Data & runtime storage ----
+# SQLite, Chroma, Redis cache, embeddings, etc.
+data/
+*.db
+*.sqlite
+*.sqlite3
+chroma/
+chroma_index/
+vector_store/
+chromadb/
+chromadb.sqlite
+/tmp/
+__storage__/
+logs/
+*.log
+tools/test_logs/
+*.cache
+.cache/
+*.pid
+
+# ---- Model / embeddings ----
+# Transformers, SentenceTransformers, or other model downloads
+models/
+model_cache/
+sentence_transformers/
+huggingface/
+torch_cache/
+torch_models/
+transformers_cache/
+*.pt
+*.bin
+
+# ---- Tests / coverage ----
+.coverage
+htmlcov/
+pytest_cache/
+tests/__pycache__/
+reports/
+junit.xml
+test_output/
+*.pytest_cache/
+
+# ---- IDE & editor settings ----
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# ---- OS-specific junk ----
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+
+# ---- Notebooks / checkpoint artifacts ----
+.ipynb_checkpoints/
+*.ipynb_out.json
+
+# ---- Node / web dashboard ----
+# (for Overseer or UI)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+coverage/
+
+# ---- Docker & compose overrides ----
+docker-compose.override.yml
+*.bak
+*.tmp
+*.old
+
+# ---- Dependency / env locks (optional to ignore) ----
+# Comment these out if you plan to version-lock requirements.
+# requirements.txt
+# requirements_safe.txt
+# requirements_shiva.txt
+
+# ---- Misc ----
+*.pid
+*.lock
+*.crt
+*.csr
+*.pub

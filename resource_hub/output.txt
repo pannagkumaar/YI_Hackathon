@@ -1,0 +1,176 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.0, pluggy-1.6.0
+rootdir: /home/harini/Harini/GTEHackathon/NEW/YI_Hackathon/resource_hub
+configfile: pytest.ini
+plugins: anyio-4.11.0
+collected 10 items
+
+tests/test_resource_hub_unit.py FFFFFFF..F                               [100%]
+
+=================================== FAILURES ===================================
+_______________________________ test_health_rag ________________________________
+
+    def test_health_rag():
+        """Ensure the RAG health endpoint works and Chroma initializes."""
+        r = client.get("/health/rag")
+>       assert r.status_code == 200
+E       assert 403 == 200
+E        +  where 403 = <Response [403 Forbidden]>.status_code
+
+tests/test_resource_hub_unit.py:22: AssertionError
+______________________________ test_memory_stats _______________________________
+
+    def test_memory_stats():
+        """Verify /memory/stats returns correct structure."""
+        r = client.get("/memory/stats", headers=HEADERS)
+>       assert r.status_code == 200
+E       assert 403 == 200
+E        +  where 403 = <Response [403 Forbidden]>.status_code
+
+tests/test_resource_hub_unit.py:30: AssertionError
+________________________ test_contextual_recall_compose ________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78c30e5a7200>
+
+    def test_contextual_recall_compose(monkeypatch):
+        """Ensure contextual recall returns results and optional Gemini summary."""
+    
+        def mock_recall(task_id, text, k=3):
+            return [{"text": "Sample context A", "metadata": {"source": "test"}}]
+    
+        def mock_ask(prompt, max_output_tokens=256):
+            return "Mock summary generated."
+    
+        monkeypatch.setattr("app.services.rag_service.recall", mock_recall)
+        monkeypatch.setattr("app.core.gemini_client.ask_gemini", mock_ask)
+    
+        body = {"task_id": "t1", "text": "test recall", "k": 1, "compose": True}
+        r = client.post("/memory/contextual-recall", headers=HEADERS, json=body)
+>       assert r.status_code == 200
+E       assert 403 == 200
+E        +  where 403 = <Response [403 Forbidden]>.status_code
+
+tests/test_resource_hub_unit.py:55: AssertionError
+_____________________ test_contextual_recall_unauthorized ______________________
+
+    def test_contextual_recall_unauthorized():
+        """Ensure unauthorized access is rejected."""
+        r = client.post("/memory/contextual-recall", json={"task_id": "t1", "text": "x"})
+>       assert r.status_code == 401
+E       assert 403 == 401
+E        +  where 403 = <Response [403 Forbidden]>.status_code
+
+tests/test_resource_hub_unit.py:65: AssertionError
+_________________________ test_embeddings_consistency __________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78c30e5a6750>
+
+    def test_embeddings_consistency(monkeypatch):
+        """Embedding same text twice should yield similar vectors."""
+        from app.core.embeddings import embed_text
+        v1 = embed_text("sample text")
+        v2 = embed_text("sample text")
+        # Cosine similarity
+        import numpy as np
+        cos = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+>       assert cos > 0.99
+E       assert -0.017002418659567527 > 0.99
+
+tests/test_resource_hub_unit.py:79: AssertionError
+____________________________ test_tool_list_execute ____________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78c30e5a7b00>
+
+    def test_tool_list_execute(monkeypatch):
+        """Ensure tools list and execute endpoints work."""
+    
+        # Mock tool execution to return deterministic result
+        def mock_execute_tool(task_id, tool, params):
+            return {"tool": tool, "output": "success"}
+    
+        monkeypatch.setattr("app.services.tool_service.execute_tool", mock_execute_tool, raising=False)
+    
+        # list
+        r = client.get("/tools/list", headers=HEADERS)
+>       assert r.status_code == 200
+E       assert 403 == 200
+E        +  where 403 = <Response [403 Forbidden]>.status_code
+
+tests/test_resource_hub_unit.py:96: AssertionError
+______________________________ test_autorag_retry ______________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78c30dc19ee0>
+
+    def test_autorag_retry(monkeypatch):
+        """Ensure autorag retry mechanism behaves correctly."""
+    
+        from app.services import rag_service
+    
+        # simulate failure twice, then success
+        state = {"calls": 0}
+    
+        def mock_get_collection():
+            state["calls"] += 1
+            if state["calls"] < 3:
+                raise RuntimeError("Chroma not ready")
+            return "ok"
+    
+>       monkeypatch.setattr(rag_service, "_get_collection", mock_get_collection)
+E       AttributeError: <module 'app.services.rag_service' from '/home/harini/Harini/GTEHackathon/NEW/YI_Hackathon/resource_hub/app/services/rag_service.py'> has no attribute '_get_collection'
+
+tests/test_resource_hub_unit.py:123: AttributeError
+___________________________ test_remember_and_recall ___________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78c30dc1a7b0>
+
+    def test_remember_and_recall(monkeypatch):
+        """Store text into Chroma and recall it."""
+        from app.services import rag_service
+    
+        # try a real add/get cycle
+        doc_id = rag_service.remember_document("unit1", "test document content")
+>       assert isinstance(doc_id, str)
+E       AssertionError: assert False
+E        +  where False = isinstance({'chunk_ids': ['1530d21c-4d07-4609-93d1-8f9459b079b4#0'], 'doc_id': '1530d21c-4d07-4609-93d1-8f9459b079b4'}, str)
+
+tests/test_resource_hub_unit.py:161: AssertionError
+=============================== warnings summary ===============================
+main.py:79
+  /home/harini/Harini/GTEHackathon/NEW/YI_Hackathon/resource_hub/main.py:79: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../venv/lib/python3.12/site-packages/fastapi/applications.py:4575
+../venv/lib/python3.12/site-packages/fastapi/applications.py:4575
+  /home/harini/Harini/GTEHackathon/NEW/YI_Hackathon/venv/lib/python3.12/site-packages/fastapi/applications.py:4575: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+main.py:91
+  /home/harini/Harini/GTEHackathon/NEW/YI_Hackathon/resource_hub/main.py:91: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_resource_hub_unit.py::test_health_rag - assert 403 == 200
+FAILED tests/test_resource_hub_unit.py::test_memory_stats - assert 403 == 200
+FAILED tests/test_resource_hub_unit.py::test_contextual_recall_compose - asse...
+FAILED tests/test_resource_hub_unit.py::test_contextual_recall_unauthorized
+FAILED tests/test_resource_hub_unit.py::test_embeddings_consistency - assert ...
+FAILED tests/test_resource_hub_unit.py::test_tool_list_execute - assert 403 =...
+FAILED tests/test_resource_hub_unit.py::test_autorag_retry - AttributeError: ...
+FAILED tests/test_resource_hub_unit.py::test_remember_and_recall - AssertionE...
+=================== 8 failed, 2 passed, 4 warnings in 0.24s ====================

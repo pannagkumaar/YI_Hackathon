@@ -203,6 +203,30 @@
     </style>
 </head>
 <body>
+    <!-- Insert near top of body -->
+    <div id="memory-stats" style="padding:8px;border:1px solid #ddd;margin-bottom:12px;">
+    Memory: short-term: <span id="mem-short">-</span>,
+    long-term: <span id="mem-long">-</span>,
+    last-updated: <span id="mem-last">-</span>
+    </div>
+
+    <script>
+    const SHARED_SECRET = "dev-secret"; // or fetch from safe place
+    async function fetchMemoryStats(){
+    try{
+        const resp = await fetch("/memory/stats", { headers: { "Authorization": `Bearer ${SHARED_SECRET}` }});
+        if(!resp.ok) return;
+        const j = await resp.json();
+        document.getElementById("mem-short").innerText = j.short_term_count ?? 0;
+        document.getElementById("mem-long").innerText = j.long_term_count ?? 0;
+        document.getElementById("mem-last").innerText = new Date((j.last_updated||0)*1000).toLocaleString();
+    }catch(e){
+        console.warn("memory stats fetch failed", e);
+    }
+    }
+    setInterval(fetchMemoryStats, 10000);
+    fetchMemoryStats();
+    </script>
 
     <div class="container">
         <h2>👨‍💼 Task Dashboard (Refreshes every 2s)</h2>

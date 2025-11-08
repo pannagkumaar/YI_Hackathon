@@ -1,10 +1,17 @@
+import warnings
+import logging
+warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
+logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
+
 from fastapi import FastAPI, Depends
 from contextlib import asynccontextmanager
 import asyncio
 import uvicorn
 from app.core.config import settings
+from app.core.config import settings
 from app.core.db import init_db, start_cleanup_thread
 from app.core.discovery import start_heartbeat_loop
+from app.services.rag_auto_populator import start_autorag_thread, start_policy_thread
 
 # --- Integration Imports ---
 # Import all existing and new routers
@@ -49,15 +56,26 @@ app.include_router(long_memory_router.router)
 app.include_router(rag_router.router)
 # --- End Include Routers ---
 
+# --- Health Check Endpoint ---
+@app.get("/healthz", tags=["System"])
+def healthcheck():
+    """Simple health-check endpoint for monitoring."""
+    return {"status": "ok", "message": "Resource Hub is alive"}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # This function runs on server startup
     print("Initializing database...")
     init_db()
     print("Starting background cleanup thread...")
     start_cleanup_thread()
-    
+
+    # Start auto-RAG populator thread
+    await asyncio.sleep(5)  # Give app time to start listening
+    start_autorag_thread()
+    await asyncio.sleep(2)
+    start_policy_thread()
+
     # Start a background heartbeat if directory url is configured
     hb_task = None
     if settings.DIRECTORY_URL:
@@ -89,7 +107,7 @@ if __name__ == "__main__":
     try:
         port = int(settings.SERVICE_BASE_URL.split(':')[-1])
     except Exception:
-        port = 8000
+        port = SERVICE_PORT = 8006
         
     print(f"Starting SHIVA Resource Hub on http://0.0.0.0:{port}...")
     uvicorn.run(

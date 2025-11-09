@@ -25,7 +25,7 @@ shiva_env/
 *.virtualenv/
 
 # ---- Environment / secrets ----
-.env
+*.env
 .env.local
 .env.dev
 .env.prod

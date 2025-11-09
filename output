@@ -1,0 +1,61 @@
+
+[33m🚀 Starting SHIVA Docker Integration Test[0m
+
+
+[36m=== Health Check ===[0m
+[31m❌ directory       → http://localhost:8005/healthz (404)[0m
+[31m❌ overseer        → http://localhost:8002/healthz (404)[0m
+[31m❌ manager         → http://localhost:8003/healthz (404)[0m
+[31m❌ partner         → http://localhost:8004/healthz (404)[0m
+[31m❌ guardian        → http://localhost:8006/healthz (404)[0m
+[32m✅ resource_hub    → http://localhost:8007/healthz OK[0m
+
+[36m=== Directory Registration ===[0m
+{
+  "overseer": {
+    "url": "http://localhost:8004",
+    "last_seen": "2025-11-09T08:46:51.293814",
+    "expires_at": "2025-11-09T08:47:51.293823"
+  },
+  "partner": {
+    "url": "http://localhost:8002",
+    "last_seen": "2025-11-09T08:47:21.566110",
+    "expires_at": "2025-11-09T08:48:21.566116"
+  },
+  "guardian": {
+    "url": "http://localhost:8003",
+    "last_seen": "2025-11-09T08:47:21.566329",
+    "expires_at": "2025-11-09T08:48:21.566332"
+  },
+  "manager": {
+    "url": "http://localhost:8001",
+    "last_seen": "2025-11-09T08:47:22.247731",
+    "expires_at": "2025-11-09T08:48:22.247749"
+  },
+  "resource_hub": {
+    "url": "http://resource_hub:8006",
+    "last_seen": "2025-11-09T08:45:10.033269",
+    "expires_at": "2025-11-09T08:50:10.033276"
+  }
+}
+[32m✅ Registered: overseer[0m
+[32m✅ Registered: manager[0m
+[32m✅ Registered: partner[0m
+[32m✅ Registered: guardian[0m
+[32m✅ Registered: resource_hub[0m
+
+[36m=== Overseer Logging Test ===[0m
+Overseer log status: 201 → {"status":"Logged","log_id":1}
+
+[36m=== Resource Hub Functional Test ===[0m
+Tools: 200 → 3 entries
+Policies: 404 → 0 entries
+
+[36m=== Manager Task Creation ===[0m
+Task create: 404 → {"detail":"Not Found"}
+
+[36m=== Partner Directory Discovery ===[0m
+Partner discover: 200 → {"service_name":"manager","url":"http://localhost:8001"}
+
+[32m✅ Integration test complete. Review outputs for any ❌.[0m
+

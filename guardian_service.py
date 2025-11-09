@@ -166,7 +166,7 @@ class ValidatePlan(BaseModel):
 def get_policies_from_hub(task_id: str) -> list:
     """Fetches the latest policies from the Resource Hub."""
     try:
-        hub_url = discover("resource-hub-service")
+         
         resp = requests.get(f"{hub_url}/policy/list", params={"context": "global"}, headers=AUTH_HEADER)
         if resp.status_code == 200:
             policies = resp.json().get("policies", [])

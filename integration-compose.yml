@@ -90,6 +90,8 @@ services:
       - "8007:8006"
     volumes:
       - ./resource_hub:/app  # live mount for dev
+    env_file:
+      - ./resource_hub/.env 
     environment:
       - IN_DOCKER=true
       - SHIVA_SECRET=mysecretapikey

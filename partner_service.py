@@ -47,7 +47,7 @@ app = FastAPI(
     dependencies=[Depends(get_api_key)]
 )
 
-API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
+API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
 OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
@@ -119,7 +119,7 @@ async def discover_async(client: httpx.AsyncClient, service_name: str) -> str:
 
 async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
     try:
-        overseer_url = await discover_async(client, "overseer-service")
+        overseer_url = await discover_async(client, "overseer")
         await client.post(f"{overseer_url}/log/event", json={
             "service": SERVICE_NAME,
             "task_id": task_id,
@@ -317,6 +317,10 @@ async def execute_goal(data: ExecuteGoal):
         await log_to_overseer(client, task_id, "ERROR", "Task failed: Max loops exceeded.")
         return {"task_id": task_id, "status": "FAILED", "reason": "Max loops exceeded"}
 # --- End ReAct Loop ---
+
+@app.get("/healthz", dependencies=[], tags=["System"])
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
 
 if __name__ == "__main__":
     print("Starting Partner Service on port 8002...")

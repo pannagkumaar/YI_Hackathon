@@ -6,7 +6,7 @@ services:
     ports:
       - "8005:8005"
     environment:
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - SERVICE_NAME=directory
     volumes:
       - .:/app
@@ -19,7 +19,7 @@ services:
     ports:
       - "8002:8004"
     environment:
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - DIRECTORY_URL=http://directory:8005
       - SERVICE_NAME=overseer
     depends_on:
@@ -34,7 +34,7 @@ services:
     ports:
       - "8003:8001"
     environment:
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - DIRECTORY_URL=http://directory:8005
       - OVERSEER_URL=http://overseer:8004
       - SERVICE_NAME=manager
@@ -52,7 +52,7 @@ services:
     ports:
       - "8004:8002"
     environment:
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - DIRECTORY_URL=http://directory:8005
       - OVERSEER_URL=http://overseer:8004
       - SERVICE_NAME=partner
@@ -70,7 +70,7 @@ services:
     ports:
       - "8006:8003"
     environment:
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - DIRECTORY_URL=http://directory:8005
       - OVERSEER_URL=http://overseer:8004
       - SERVICE_NAME=guardian
@@ -94,7 +94,7 @@ services:
       - ./resource_hub/.env 
     environment:
       - IN_DOCKER=true
-      - SHIVA_SECRET=mysecretapikey
+      - SHARED_SECRET=mysecretapikey
       - SERVICE_NAME=resource_hub
       - SERVICE_PORT=8006
       - SERVICE_BASE_URL=http://resource_hub:8006

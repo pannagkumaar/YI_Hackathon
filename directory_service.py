@@ -71,6 +71,10 @@ def list_services():
     }
     return active_services
 
+@app.get("/healthz", dependencies=[], tags=["System"])
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
+
 if __name__ == "__main__":
     print("Starting Directory Service on port 8005...")
     uvicorn.run(app, host="0.0.0.0", port=8005)

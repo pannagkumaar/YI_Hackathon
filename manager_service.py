@@ -36,7 +36,7 @@ app = FastAPI(
     dependencies=[Depends(get_api_key)]
 )
 
-API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
+API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
 OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
@@ -99,7 +99,7 @@ async def discover(client: httpx.AsyncClient, service_name: str) -> str:
 
 async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
     try:
-        overseer_url = await discover(client, "overseer-service")
+        overseer_url = await discover(client, "overseer")
         await client.post(f"{overseer_url}/log/event", json={
             "service": "manager-service",
             "task_id": task_id,
@@ -235,7 +235,7 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             await log_to_overseer(client, task_id, "INFO", f"Task started: {request.goal}")
             
             task["status"] = "CHECKING_HALT"
-            overseer_url = await discover(client, "overseer-service")
+            overseer_url = await discover(client, "overseer")
             status_resp = await client.get(f"{overseer_url}/control/status", headers=AUTH_HEADER)
             
             if status_resp.json().get("status") == "HALT":
@@ -288,6 +288,13 @@ async def run_task_background(task_id: str, request: InvokeRequest):
             task["deviation_details"] = {"observation": f"Unhandled exception: {str(e)}"}
 
 # --- Public API Endpoints ---
+
+@app.post("/task/create", status_code=201)
+def create_task(request: dict):
+    goal = request.get("goal", "No goal specified")
+    task_id = f"task-{int(time.time())}"
+    print(f"[Manager] Created task: {task_id} ({goal})")
+    return {"task_id": task_id, "goal": goal, "status": "created"}
 
 @app.post("/invoke", status_code=202)
 async def invoke(request: InvokeRequest, background_tasks: BackgroundTasks):
@@ -372,6 +379,10 @@ def get_all_tasks():
     # Convert dict to a list of its values
     return list(tasks_db.values())
 # --- END NEW Endpoint ---
+
+@app.get("/healthz", dependencies=[], tags=["System"])
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
 
 
 if __name__ == "__main__":

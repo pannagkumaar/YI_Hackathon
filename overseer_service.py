@@ -19,10 +19,10 @@ app = FastAPI(
     description="Observability, logging, and kill-switch for SHIVA."
 )
 
-API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
+API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer-service")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer")
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8004))
 # --- End Authentication & Service Constants ---
 
@@ -217,6 +217,11 @@ def resume_system(api_key: str = Depends(get_api_key)):
     print("[Overseer] --- System Resumed ---")
     status["system"] = "RUNNING"
     return {"status": "RUNNING", "message": "System resume signal issued"}
+
+@app.get("/healthz", tags=["System"])
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
+
 
 if __name__ == "__main__":
     print(f"Starting Overseer Service on port {SERVICE_PORT}...")

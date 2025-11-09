@@ -1,254 +1,261 @@
-# 📄 guardian_service.py
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-import uvicorn
-import requests
-import threading
-import time
-from security import get_api_key # Import our new auth function
-from gemini_client import get_model, generate_json
-import json
-from typing import List # Import List
-import os
-
-# --- MODIFIED: System Prompt ---
-GUARDIAN_SYSTEM_PROMPT = """
-You are the "Guardian," a compliance and safety assistant for the SHIVA agent system.
-Your sole purpose is to evaluate a "proposed_action" or "plan" against a set of "policies."
-You will also be given "Task Memory" (a history of recent T-A-O).
-
-Use this memory to inform your decision. For example, if an action failed 
-or was denied recently, you should be more cautious about allowing a similar action.
-
-You must respond ONLY with a JSON object with two keys:
-1. "decision": Must be either "Allow" or "Deny".
-2. "reason": A brief, clear explanation for your decision.
-
-Evaluate strictly. If a policy is "Disallow: <keyword>" and the <keyword> is in the 
-proposed_action, you must "Deny" it. Also deny any plan with > 10 steps 
-as "excessively complex".
 """
-# --- END MODIFICATION ---
-guardian_model = get_model(system_instruction=GUARDIAN_SYSTEM_PROMPT)
-# --- Authentication & Service Constants ---
+Guardian Service — SHIVA Compliance & Safety Layer
+--------------------------------------------------
+Evaluates actions and plans against safety policies and runbooks,
+using deterministic + LLM-based reasoning, with audit logs to Overseer.
+"""
+
+import os
+import json
+import time
+import threading
+import requests
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# === Local Imports ===
+from guardian_prompt_safety import analyze_payload
+from guardian_rules import deterministic_eval_action, deterministic_eval_plan
+from guardian_schemas import ACTION_DECISION_SCHEMA, PLAN_VALIDATION_SCHEMA
+
+# === Config ===
+API_KEY = os.getenv("SHIVA_SECRET", os.getenv("SHARED_SECRET", "mysecretapikey"))
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://directory:8005").rstrip("/")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "guardian")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8003))
+SERVICE_URL = os.getenv("SELF_URL", f"http://{SERVICE_NAME}:{SERVICE_PORT}")
+IN_DOCKER = os.getenv("IN_DOCKER", "false").lower() == "true"
+
+AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
+
+# === Globals ===
+_policy_cache = {}
+_POLICY_TTL = 30
+human_overrides = {}
+
 app = FastAPI(
     title="Guardian Service",
-    description="Compliance and safety assistant for SHIVA.",
-    dependencies=[Depends(get_api_key)] # Apply auth to all endpoints
+    description="Compliance & Policy Enforcement Layer for SHIVA"
 )
 
-API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
-AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
-OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "guardian-service")
-SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8003))
+# -------------------- Utility --------------------
 
-# --- End Authentication & Service Constants ---
-
-
-# --- MODIFIED: Mock Agent Function ---
-def use_agent(prompt: str, input_data: dict, policies: list, memory: list) -> dict:
-    """(UPDATED) AI-based validation logic using Gemini."""
-    print(f"[Guardian] AI Agent called with prompt: {prompt}")
-
-    # Construct the prompt for the model
-    prompt_parts = [
-        f"User Prompt: {prompt}\n",
-        f"Policies: {json.dumps(policies)}\n",
-        f"Task Memory (Recent): {json.dumps(memory[-5:])}\n", # Pass only recent memory
-        f"Input Data: {json.dumps(input_data)}\n\n",
-        "Evaluate the input and return your JSON decision (decision, reason)."
-    ]
-    
-    # Call the helper
-    validation = generate_json(guardian_model, prompt_parts)
-    
-    # Fallback in case of JSON error
-    if "error" in validation or "decision" not in validation:
-        print(f"[Guardian] AI validation failed: {validation.get('error', 'Invalid format')}")
-        return {"decision": "Deny", "reason": f"AI model error: {validation.get('error', 'Invalid format')}"}
-
-    return validation
-# --- END MODIFICATION ---
-
-
-# --- Service Discovery & Logging (Copied from Manager, with Auth) ---
 def discover(service_name: str) -> str:
-    """Finds a service's URL from the Directory."""
-    print(f"[Guardian] Discovering: {service_name}")
-    try:
-        r = requests.get(
-            f"{DIRECTORY_URL}/discover",
-            params={"service_name": service_name},
-            headers=AUTH_HEADER
-        )
-        if r.status_code != 200:
-            print(f"[Guardian] FAILED to discover {service_name}.")
-            raise HTTPException(500, detail=f"Could not discover {service_name}")
-        url = r.json()["url"]
-        print(f"[Guardian] Discovered {service_name} at {url}")
-        return url
-    except requests.exceptions.ConnectionError:
-        print(f"[Guardian] FAILED to connect to Directory at {DIRECTORY_URL}")
-        raise HTTPException(500, detail="Could not connect to Directory Service")
+    """
+    Robust Directory discovery: tries multiple name variants.
+    Works both inside and outside Docker.
+    """
+    variants = [
+        service_name,
+        f"{service_name}-service",
+        service_name.replace("_", "-"),
+        service_name.replace("-", "_"),
+    ]
+    for name in dict.fromkeys(variants):
+        try:
+            r = requests.get(
+                f"{DIRECTORY_URL}/discover",
+                params={"service_name": name},
+                headers=AUTH_HEADER,
+                timeout=3,
+            )
+            if r.status_code == 200 and "url" in r.json():
+                url = r.json()["url"].rstrip("/")
+                if IN_DOCKER and ("localhost" in url or "127.0.0.1" in url):
+                    url = url.replace("http://127.0.0.1", f"http://{name}").replace("http://localhost", f"http://{name}")
+                print(f"[Guardian] Discovered {name}: {url}")
+                return url
+        except Exception as e:
+            continue
+    raise HTTPException(status_code=500, detail=f"Could not discover {service_name}")
 
-def log_to_overseer(task_id: str, level: str, message: str, context: dict = {}):
-    """Sends a log entry to the Overseer service."""
+def log_to_overseer(task_id: str, level: str, message: str, context: dict = None):
+    """Send structured logs to Overseer."""
+    context = context or {}
     try:
-        overseer_url = discover("overseer-service")
-        requests.post(f"{overseer_url}/log/event", json={
+        overseer_url = discover("overseer")
+        r = requests.post(f"{overseer_url}/log/event", json={
             "service": SERVICE_NAME,
             "task_id": task_id,
             "level": level,
             "message": message,
             "context": context
-        }, headers=AUTH_HEADER)
+        }, headers=AUTH_HEADER, timeout=5)
+        if r.status_code >= 400:
+            print(f"[Guardian] Overseer log returned {r.status_code}: {r.text}")
     except Exception as e:
-        print(f"[Guardian] FAILED to log to Overseer: {e}")
-# --- End Service Discovery & Logging ---
+        print(f"[Guardian] Overseer log failed: {e}")
 
+# -------------------- Policy Cache --------------------
 
-# --- Service Registration (UPDATED with Auth) ---
+def fetch_policies_from_hub(context: str = "global") -> list:
+    now = time.time()
+    cache = _policy_cache.get(context)
+    if cache and cache.get("expires_at", 0) > now:
+        return cache["policies"]
+
+    try:
+        hub_url = discover("resource_hub")
+        r = requests.get(f"{hub_url}/policy/list",
+                         params={"context": context},
+                         headers=AUTH_HEADER, timeout=5)
+        if r.status_code == 200:
+            policies = r.json().get("policies", [])
+            _policy_cache[context] = {"policies": policies, "expires_at": now + _POLICY_TTL}
+            print(f"[Guardian] Cached {len(policies)} policies.")
+            return policies
+        else:
+            log_to_overseer("N/A", "WARN", f"Hub policy fetch failed {r.status_code}", {"text": r.text})
+    except Exception as e:
+        log_to_overseer("N/A", "ERROR", f"Policy fetch error: {e}")
+    return []
+
+# -------------------- Registration --------------------
+
 def register_self():
-    """Registers this service with the Directory."""
-    service_url = f"http://localhost:{SERVICE_PORT}"
+    """Register Guardian with Directory and refresh periodically."""
     while True:
         try:
             r = requests.post(f"{DIRECTORY_URL}/register", json={
                 "service_name": SERVICE_NAME,
-                "service_url": service_url,
+                "service_url": SERVICE_URL,
                 "ttl_seconds": 60
-            }, headers=AUTH_HEADER) # Auth
+            }, headers=AUTH_HEADER, timeout=5)
             if r.status_code == 200:
-                print(f"[Guardian] Successfully registered with Directory at {DIRECTORY_URL}")
+                print(f"[Guardian] Registered with Directory at {DIRECTORY_URL}")
                 threading.Thread(target=heartbeat, daemon=True).start()
                 break
             else:
-                print(f"[Guardian] Failed to register. Status: {r.status_code}. Retrying in 5s...")
-        except requests.exceptions.ConnectionError:
-            print(f"[Guardian] Could not connect to Directory. Retrying in 5s...")
+                print(f"[Guardian] Registration failed ({r.status_code}). Retrying...")
+        except Exception:
+            print(f"[Guardian] Directory unavailable. Retry in 5s.")
         time.sleep(5)
 
 def heartbeat():
-    """Sends a periodic heartbeat to the Directory."""
-    service_url = f"http://localhost:{SERVICE_PORT}"
+    """Send periodic TTL updates."""
     while True:
         time.sleep(45)
         try:
             requests.post(f"{DIRECTORY_URL}/register", json={
                 "service_name": SERVICE_NAME,
-                "service_url": service_url,
+                "service_url": SERVICE_URL,
                 "ttl_seconds": 60
-            }, headers=AUTH_HEADER) # Auth
-            print("[Guardian] Heartbeat sent to Directory.")
-        except requests.exceptions.ConnectionError:
-            print("[Guardian] Failed to send heartbeat. Will retry registration.")
+            }, headers=AUTH_HEADER, timeout=5)
+            print("[Guardian] Heartbeat sent.")
+        except Exception:
+            print("[Guardian] Heartbeat failed. Restarting registration.")
             register_self()
             break
 
 @app.on_event("startup")
 def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
-# --- End Service Registration ---
+
+# -------------------- Models --------------------
 
 class ValidateAction(BaseModel):
     task_id: str
     proposed_action: str
-    context: dict
+    context: dict = {}
 
 class ValidatePlan(BaseModel):
     task_id: str
-    plan: dict # e.g., {"steps": [...]}
+    plan: dict
 
+# -------------------- Routes --------------------
 
-# --- Utility Function to Fetch Policies ---
-def get_policies_from_hub(task_id: str) -> list:
-    """Fetches the latest policies from the Resource Hub."""
+@app.get("/healthz", tags=["System"])
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
+
+@app.post("/guardian/validate_action")
+def validate_action(payload: ValidateAction):
+    """Evaluate a single action request."""
+    task_id, proposed_action = payload.task_id, payload.proposed_action
+    context = payload.context or {}
+    policies = fetch_policies_from_hub("global")
+
     try:
-         
-        resp = requests.get(f"{hub_url}/policy/list", params={"context": "global"}, headers=AUTH_HEADER)
-        if resp.status_code == 200:
-            policies = resp.json().get("policies", [])
-            log_to_overseer(task_id, "INFO", f"Fetched {len(policies)} policies from Resource Hub.")
-            return policies
-        log_to_overseer(task_id, "WARN", f"Failed to fetch policies from Resource Hub: {resp.text}")
+        analysis = analyze_payload({
+            "task_id": task_id,
+            "proposed_action": proposed_action,
+            "context": context
+        }, policies=policies)
     except Exception as e:
-        log_to_overseer(task_id, "ERROR", f"Error fetching policies: {e}")
-    return [] # Default to empty list on failure
-# --- End Utility Function ---
+        log_to_overseer(task_id, "ERROR", f"Analyzer failed: {e}")
+        return JSONResponse(status_code=403, content={"decision": "Deny", "reason": f"Analyzer error: {e}"})
 
-# --- NEW: Utility Function to Fetch Memory ---
-def get_memory_from_hub(task_id: str) -> list:
-    """Fetches the latest task memory from the Resource Hub."""
+    decision = analysis.get("decision", "Deny")
+    reason = analysis.get("one_liner", "No reason")
+
+    log_to_overseer(task_id, "INFO", f"Guardian decision: {decision}", analysis)
+
+    if decision == "Deny":
+        return JSONResponse(status_code=403, content={"decision": "Deny", "reason": reason})
+    elif decision == "Ambiguous":
+        return JSONResponse(status_code=200, content={
+            "decision": "Ambiguous",
+            "reason": reason,
+            "requires_human_review": True,
+            "details": analysis
+        })
+    else:
+        return JSONResponse(status_code=200, content={
+            "decision": "Allow",
+            "reason": reason,
+            "details": analysis
+        })
+
+@app.post("/guardian/validate_plan")
+def validate_plan(payload: ValidatePlan):
+    """Evaluate multi-step plan."""
+    task_id, plan = payload.task_id, payload.plan
+    policies = fetch_policies_from_hub("global")
+
+    if not isinstance(plan, dict) or "steps" not in plan:
+        return JSONResponse(status_code=403, content={"decision": "Deny", "reason": "Malformed plan"})
+
     try:
-        hub_url = discover("resource-hub-service")
-        resp = requests.get(f"{hub_url}/memory/{task_id}", headers=AUTH_HEADER)
-        if resp.status_code == 200:
-            memory = resp.json() # This returns a List[MemoryEntry]
-            log_to_overseer(task_id, "INFO", f"Fetched {len(memory)} memory entries from Resource Hub.")
-            return memory
-        log_to_overseer(task_id, "WARN", f"Failed to fetch memory from Resource Hub: {resp.text}")
+        result = deterministic_eval_plan(plan, policies)
     except Exception as e:
-        log_to_overseer(task_id, "ERROR", f"Error fetching memory: {e}")
-    return [] # Default to empty list on failure
-# --- END NEW Utility Function ---
+        log_to_overseer(task_id, "ERROR", f"Plan evaluation error: {e}")
+        return JSONResponse(status_code=403, content={"decision": "Deny", "reason": "Evaluation error"})
 
+    log_to_overseer(task_id, "INFO", f"Plan decision: {result['decision']}", result)
 
-# --- MODIFIED: validate_action ---
-@app.post("/guardian/validate_action", status_code=200)
-def validate_action(data: ValidateAction):
-    """Validate a single proposed action before execution."""
-    log_to_overseer(data.task_id, "INFO", f"Validating action: {data.proposed_action}")
-    
-    # Fetch dynamic policies
-    policies = get_policies_from_hub(data.task_id)
-    # NEW: Fetch task memory
-    memory = get_memory_from_hub(data.task_id)
-    
-    # Use the mock AI agent for a decision
-    validation = use_agent(
-        "Validate this single action for safety and compliance",
-        data.dict(),
-        policies,
-        memory # Pass memory
-    )
-    
-    if validation["decision"] != "Allow":
-        log_to_overseer(data.task_id, "WARN", f"Action DENIED: {validation['reason']}", validation)
+    if result["decision"] == "Deny":
+        return JSONResponse(status_code=403, content=result)
     else:
-        log_to_overseer(data.task_id, "INFO", "Action ALLOWED.")
-        
-    return validation
-# --- END MODIFICATION ---
+        return JSONResponse(status_code=200, content=result)
 
-# --- MODIFIED: validate_plan ---
-@app.post("/guardian/validate_plan", status_code=200)
-def validate_plan(data: ValidatePlan):
-    """Validate a high-level execution plan."""
-    log_to_overseer(data.task_id, "INFO", f"Validating plan with {len(data.plan.get('steps',[]))} steps.")
-    
-    # Fetch dynamic policies
-    policies = get_policies_from_hub(data.task_id)
-    # NEW: Fetch task memory
-    memory = get_memory_from_hub(data.task_id)
+@app.post("/guardian/human_resolve")
+def human_resolve(payload: dict):
+    """Manual override endpoint for human approval."""
+    task_id = payload.get("task_id")
+    decision = payload.get("decision")
+    if not task_id or decision not in ("Allow", "Deny"):
+        raise HTTPException(400, "Invalid input")
 
-    # Use the mock AI agent for a decision
-    validation = use_agent(
-        "Validate this multi-step plan for safety and complexity",
-        data.dict(),
-        policies,
-        memory # Pass memory
-    )
+    human_overrides[task_id] = {
+        "decision": decision,
+        "approved_by": payload.get("approved_by", "operator"),
+        "note": payload.get("note", ""),
+        "timestamp": time.time()
+    }
+    log_to_overseer(task_id, "INFO", f"Human override: {decision}", human_overrides[task_id])
+    return {"status": "Recorded", "task_id": task_id, "decision": decision}
 
-    if validation["decision"] != "Allow":
-        log_to_overseer(data.task_id, "WARN", f"Plan DENIED: {validation['reason']}", validation)
-    else:
-        log_to_overseer(data.task_id, "INFO", "Plan ALLOWED.")
-        
-    return validation
-# --- END MODIFICATION ---
+@app.get("/guardian/debug_last")
+def debug_last():
+    """Debug route to confirm analyzer output easily."""
+    if not _policy_cache:
+        return {"status": "empty"}
+    return {"cached_policies": _policy_cache}
 
+# -------------------- Entrypoint --------------------
 if __name__ == "__main__":
-    print("Starting Guardian Service on port 8003...")
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    print(f"Starting Guardian on http://0.0.0.0:{SERVICE_PORT} ...")
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)
+

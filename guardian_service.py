@@ -9,6 +9,7 @@ from security import get_api_key # Import our new auth function
 from gemini_client import get_model, generate_json
 import json
 from typing import List # Import List
+import os
 
 # --- MODIFIED: System Prompt ---
 GUARDIAN_SYSTEM_PROMPT = """
@@ -36,11 +37,13 @@ app = FastAPI(
     dependencies=[Depends(get_api_key)] # Apply auth to all endpoints
 )
 
-API_KEY = "mysecretapikey"
+API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "guardian-service"
-SERVICE_PORT = 8003
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
+OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "guardian-service")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8003))
+
 # --- End Authentication & Service Constants ---
 
 

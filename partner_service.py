@@ -12,6 +12,7 @@ from typing import List
 # --- NEW: Gemini Client Setup ---
 from gemini_client import get_model, generate_json
 import json
+import os
 
 PARTNER_SYSTEM_PROMPT = """
 You are "Partner," a ReAct-style AI worker agent for the SHIVA system.
@@ -45,11 +46,14 @@ app = FastAPI(
     description="ReAct Runtime worker for SHIVA.",
     dependencies=[Depends(get_api_key)]
 )
-API_KEY = "mysecretapikey"
+
+API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "partner-service"
-SERVICE_PORT = 8002
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
+OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "partner-service")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8002))
+
 # --- End Authentication & Service Constants ---
 
 

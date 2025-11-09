@@ -9,6 +9,7 @@ import threading
 import time
 import json
 from typing import List
+import os
 
 from security import get_api_key
 
@@ -18,11 +19,11 @@ app = FastAPI(
     description="Observability, logging, and kill-switch for SHIVA."
 )
 
-API_KEY = "mysecretapikey"
+API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "overseer-service"
-SERVICE_PORT = 8004
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer-service")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8004))
 # --- End Authentication & Service Constants ---
 
 # In-memory log storage

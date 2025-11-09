@@ -11,6 +11,7 @@ from security import get_api_key
 # --- NEW: Gemini Client Setup ---
 from gemini_client import get_model, generate_json
 import json
+import os
 
 MANAGER_SYSTEM_PROMPT = """
 You are the "Manager," an AI team lead for the SHIVA agent system.
@@ -34,11 +35,14 @@ app = FastAPI(
     description="Orchestrator for SHIVA.",
     dependencies=[Depends(get_api_key)]
 )
-API_KEY = "mysecretapikey"
+
+API_KEY = os.getenv("SHIVA_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = "http://localhost:8005"
-SERVICE_NAME = "manager-service"
-SERVICE_PORT = 8001
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
+OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "manager-service")
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8001))
+
 # --- End Authentication & Service Constants ---
 
 # --- In-memory Task Database ---

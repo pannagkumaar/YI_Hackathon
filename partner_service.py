@@ -130,7 +130,7 @@ def heartbeat():
             register_self()
             break
 
-@app.lifespan("startup")
+@app.on_event("startup")
 def on_startup():
     threading.Thread(target=register_self, daemon=True).start()
 

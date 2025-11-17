@@ -2,9 +2,17 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.services.rag_service import recall, store_qa
 from app.core.gemini_client import ask_gemini
-from app.core.logging_client import send_log
+from core.logging_client import send_log
 from app.core.config import settings
 import textwrap
+from dotenv import load_dotenv
+import os
+
+
+# Load .env and .env.local (if present)
+load_dotenv()
+if os.path.exists(".env.local"):
+    load_dotenv(".env.local")
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -27,6 +35,7 @@ def rag_query(payload: dict, request: Request):
     k = int(payload.get("k", 3))
     compose = payload.get("compose", True)
     debug = payload.get("debug", False)
+    send_log(settings.SERVICE_NAME, payload.get("task_id"), "INFO", f"RAG query: {payload.get('question')}")
     if not query:
         raise HTTPException(status_code=400, detail="query required")
     # Retrieve

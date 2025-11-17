@@ -2,10 +2,8 @@ from fastapi import APIRouter, Request
 from app.services.tool_service import execute_tool
 from app.core.db import save_short_term
 from app.core.config import settings
-from app.core.logging_client import send_log
+from core.logging_client import send_log
 import uuid
-
-router = APIRouter(prefix="/demo", tags=["Demo"])
 
 @router.get("/sequence")
 def demo_sequence():

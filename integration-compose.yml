@@ -2,84 +2,35 @@ services:
   # ──────────────── Directory ────────────────
   directory:
     image: shiva-base
-    command: ["python", "directory_service.py"]
+    # --- ADDED 5s DELAY TO ALLOW BOOT ---
+    command: ["sh", "-c", "sleep 5 && python directory_service.py"]
     ports:
       - "8005:8005"
     environment:
-      - SHARED_SECRET=mysecretapikey
+      - SHIVA_SECRET=mysecretapikey
       - SERVICE_NAME=directory
     volumes:
       - .:/app
-
+    networks:
+      - shiva_net
 
   # ──────────────── Overseer ────────────────
   overseer:
     image: shiva-base
-    command: ["python", "overseer_service.py"]
+    # --- ADDED 5s DELAY TO ALLOW BOOT ---
+    command: ["sh", "-c", "sleep 5 && python overseer_service.py"]
     ports:
       - "8002:8004"
     environment:
-      - SHARED_SECRET=mysecretapikey
+      - SHIVA_SECRET=mysecretapikey
       - DIRECTORY_URL=http://directory:8005
       - SERVICE_NAME=overseer
     depends_on:
       - directory
     volumes:
       - .:/app
-
-  # ──────────────── Manager ────────────────
-  manager:
-    image: shiva-base
-    command: ["python", "manager_service.py"]
-    ports:
-      - "8003:8001"
-    environment:
-      - SHARED_SECRET=mysecretapikey
-      - DIRECTORY_URL=http://directory:8005
-      - OVERSEER_URL=http://overseer:8004
-      - SERVICE_NAME=manager
-    depends_on:
-      - directory
-      - overseer
-    volumes:
-      - .:/app
-
-
-  # ──────────────── Partner ────────────────
-  partner:
-    image: shiva-base
-    command: ["python", "partner_service.py"]
-    ports:
-      - "8004:8002"
-    environment:
-      - SHARED_SECRET=mysecretapikey
-      - DIRECTORY_URL=http://directory:8005
-      - OVERSEER_URL=http://overseer:8004
-      - SERVICE_NAME=partner
-    depends_on:
-      - directory
-      - overseer
-    volumes:
-      - .:/app
-
-
-  # ──────────────── Guardian ────────────────
-  guardian:
-    image: shiva-base
-    command: ["python", "guardian_service.py"]
-    ports:
-      - "8006:8003"
-    environment:
-      - SHARED_SECRET=mysecretapikey
-      - DIRECTORY_URL=http://directory:8005
-      - OVERSEER_URL=http://overseer:8004
-      - SERVICE_NAME=guardian
-    depends_on:
-      - directory
-      - overseer
-    volumes:
-      - .:/app
-
+    networks:
+      - shiva_net
 
   # ──────────────── Resource Hub ────────────────
   resource_hub:
@@ -90,11 +41,9 @@ services:
       - "8007:8006"
     volumes:
       - ./resource_hub:/app  # live mount for dev
-    env_file:
-      - ./resource_hub/.env 
     environment:
       - IN_DOCKER=true
-      - SHARED_SECRET=mysecretapikey
+      - SHIVA_SECRET=mysecretapikey
       - SERVICE_NAME=resource_hub
       - SERVICE_PORT=8006
       - SERVICE_BASE_URL=http://resource_hub:8006
@@ -103,4 +52,71 @@ services:
     depends_on:
       - directory
       - overseer
+    networks:
+      - shiva_net
 
+  # ──────────────── Guardian ────────────────
+  guardian:
+    image: shiva-base
+    command: ["python", "guardian_service.py"]
+    ports:
+      - "8006:8003"
+    environment:
+      - SHIVA_SECRET=mysecretapikey
+      - DIRECTORY_URL=http://directory:8005
+      - OVERSEER_URL=http://overseer:8004
+      - SERVICE_NAME=guardian
+    depends_on:
+      - directory
+      - overseer
+      - resource_hub  # <-- ADDED
+    volumes:
+      - .:/app
+    networks:
+      - shiva_net
+
+  # ──────────────── Partner ────────────────
+  partner:
+    image: shiva-base
+    command: ["python", "partner_service.py"]
+    ports:
+      - "8004:8002"
+    environment:
+      - SHIVA_SECRET=mysecretapikey
+      - DIRECTORY_URL=http://directory:8005
+      - OVERSEER_URL=http://overseer:8004
+      - SERVICE_NAME=partner
+    depends_on:
+      - directory
+      - overseer
+      - resource_hub  # <-- ADDED
+    volumes:
+      - .:/app
+    networks:
+      - shiva_net
+
+  # ──────────────── Manager ────────────────
+  manager:
+    image: shiva-base
+    command: ["python", "manager_service.py"]
+    ports:
+      - "8003:8001"
+    environment:
+      - SHIVA_SECRET=mysecretapikey
+      - DIRECTORY_URL=http://directory:8005
+      - OVERSEER_URL=http://overseer:8004
+      - SERVICE_NAME=manager
+    depends_on:
+      - directory
+      - overseer
+      - resource_hub  # <-- ADDED
+      - guardian      # <-- ADDED
+      - partner       # <-- ADDED
+    volumes:
+      - .:/app
+    networks:
+      - shiva_net
+
+networks:
+  shiva_net:
+    driver: bridge

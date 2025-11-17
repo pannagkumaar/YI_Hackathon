@@ -34,6 +34,7 @@ shiva_env/
 *.secret
 *.key
 *.pem
+.env.docker
 
 # ---- Data & runtime storage ----
 # SQLite, Chroma, Redis cache, embeddings, etc.

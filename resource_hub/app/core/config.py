@@ -1,8 +1,13 @@
 import os
-import dotenv
+from dotenv import load_dotenv
 
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
-dotenv.load_dotenv(dotenv_path)
+
+# dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+# dotenv.load_dotenv(dotenv_path)
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(ROOT)
+load_dotenv(os.path.join(ROOT, ".env.local"))
 
 class Settings:
     def __init__(self):

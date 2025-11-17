@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from core.auth import verify_auth
-from core.logging_client import log_event
+from core.logging_client import send_log
+
 
 router = APIRouter(prefix="/tools", tags=["Tools"])
 SERVICE = "resource-hub"

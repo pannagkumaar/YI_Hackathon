@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends
 import sqlite3, time, json
 from core.auth import verify_auth
 from core.config import settings
-from core.logging_client import log_event
+from core.logging_client import send_log
+
 
 router = APIRouter(prefix="/memory/short-term", tags=["ShortTermMemory"])
 SERVICE = "resource-hub"

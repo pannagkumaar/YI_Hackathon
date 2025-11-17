@@ -1,229 +1,247 @@
-# 📄 overseer_service.py
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse
+"""
+Overseer Service for SHIVA
+- /log/event  (POST)  <- structured logs
+- /control/kill (POST) -> set HALT or RESUME
+- /control/status (GET) -> {status: "OK"/"HALT"}
+- WebSocket endpoint: /ws/logs -> broadcast logs in real-time
+- /logs (GET) -> query logs, filter by service/task_id
+"""
+
+import os
+import time
+import threading
+import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
-import requests
-import httpx # Use httpx for async
-import threading
-import time
-import json
-from typing import List
-import os
+import httpx
+import asyncio
 
-from security import get_api_key
-
-# --- Authentication & Service Constants ---
-app = FastAPI(
-    title="Overseer Service",
-    description="Observability, logging, and kill-switch for SHIVA."
-)
-
+# ============================================================
+# SERVICE CONFIG
+# ============================================================
 API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
-AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer")
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8004))
-# --- End Authentication & Service Constants ---
+SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer")
+AUTH_HEADER_NAME = "X-SHIVA-SECRET"
 
-# In-memory log storage
-logs = []
-# System status
-status = {"system": "RUNNING"}
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://127.0.0.1:8005")
+AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 
+app = FastAPI(title="SHIVA Overseer")
 
-# --- WebSocket Connection Manager (No change) ---
+# ============================================================
+# LOG STORE
+# ============================================================
+LOG_STORE = []
+LOG_LOCK = threading.Lock()
+
+# ============================================================
+# WEBSOCKET MANAGER
+# ============================================================
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        try:
+            self.active.remove(websocket)
+        except ValueError:
+            pass
 
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
+    async def broadcast(self, msg: dict):
+        to_remove = []
+        for ws in list(self.active):
             try:
-                await connection.send_text(message)
+                await ws.send_json(msg)
             except Exception:
-                self.active_connections.remove(connection)
+                to_remove.append(ws)
+        for ws in to_remove:
+            self.disconnect(ws)
 
 manager = ConnectionManager()
-# --- END: WebSocket Connection Manager ---
 
+# ============================================================
+# CONTROL STATE
+# ============================================================
+CONTROL_STATE = {"status": "OK", "updated_at": time.time(), "note": ""}
 
-class LogEntry(BaseModel):
-    service: str
-    task_id: str
-    level: str
-    message: str
-    context: dict = {}
+# ============================================================
+# AUTH HELPER
+# ============================================================
+def _auth_ok(header_val: str | None):
+    return header_val == API_KEY
 
-# --- NEW: Model for Replanning ---
-class ReplanRequest(BaseModel):
-    goal: str
-    context: dict = {}
-# ---
-
-# --- Service Registration (No change) ---
+# ============================================================
+# DIRECTORY REGISTRATION + HEARTBEAT
+# ============================================================
 def register_self():
+    """Registers this service with the Directory service."""
     while True:
         try:
-            r = requests.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
+            r = httpx.post(
+                f"{DIRECTORY_URL}/register",
+                json={
+                    "service_name": SERVICE_NAME,
+                    "service_url": f"http://127.0.0.1:{SERVICE_PORT}",
+                    "ttl_seconds": 60
+                },
+                headers=AUTH_HEADER,
+                timeout=5
+            )
             if r.status_code == 200:
-                print(f"[Overseer] Successfully registered with Directory at {DIRECTORY_URL}")
+                print(f"[Overseer] Registered with Directory at {DIRECTORY_URL}")
                 threading.Thread(target=heartbeat, daemon=True).start()
-                break
+                return
             else:
-                print(f"[Overseer] Failed to register. Retrying in 5s...")
-        except requests.exceptions.ConnectionError:
-            print(f"[Overseer] Could not connect to Directory. Retrying in 5s...")
+                print(f"[Overseer] Registration failed: {r.status_code}")
+        except Exception as e:
+            print(f"[Overseer] Directory unavailable. Retry in 5s. Error: {e}")
         time.sleep(5)
 
+
 def heartbeat():
+    """Periodic TTL refresh."""
     while True:
         time.sleep(45)
         try:
-            requests.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
+            httpx.post(
+                f"{DIRECTORY_URL}/register",
+                json={
+                    "service_name": SERVICE_NAME,
+                    "service_url": f"http://127.0.0.1:{SERVICE_PORT}",
+                    "ttl_seconds": 60
+                },
+                headers=AUTH_HEADER,
+                timeout=5
+            )
             print("[Overseer] Heartbeat sent to Directory.")
-        except requests.exceptions.ConnectionError:
-            print("[Overseer] Failed to send heartbeat. Will retry registration.")
+        except Exception as e:
+            print(f"[Overseer] Heartbeat failed: {e}. Restarting registration...")
             register_self()
-            break
+            return
 
+# Start registration on startup
 @app.on_event("startup")
-def on_startup():
+def startup_event():
     threading.Thread(target=register_self, daemon=True).start()
-# --- End Service Registration ---
 
+# ============================================================
+# LOGGING ENDPOINTS
+# ============================================================
+class LogEvent(BaseModel):
+    service: str
+    task_id: str | None = None
+    level: str
+    message: str
+    context: dict | None = {}
 
-# --- API Endpoints (UPDATED) ---
+@app.post("/log/event")
+async def log_event(payload: LogEvent, request: Request, x_shiva_secret: str | None = Header(None)):
+    if not _auth_ok(x_shiva_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-# --- Endpoints for UI (No auth) ---
-@app.get("/", response_class=HTMLResponse)
-async def get_dashboard():
-    with open("overseer_dashboard.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+    entry = {
+        "ts": time.time(),
+        "service": payload.service,
+        "task_id": payload.task_id,
+        "level": payload.level,
+        "message": payload.message,
+        "context": payload.context or {}
+    }
 
+    with LOG_LOCK:
+        LOG_STORE.append(entry)
+
+    try:
+        asyncio.create_task(manager.broadcast({"type": "log", "entry": entry}))
+    except Exception:
+        pass
+
+    return JSONResponse(status_code=200, content={"status": "ok", "entry_count": len(LOG_STORE)})
+
+@app.get("/logs")
+async def get_logs(service: str | None = None, task_id: str | None = None, limit: int = 200, x_shiva_secret: str | None = Header(None)):
+    if not _auth_ok(x_shiva_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    with LOG_LOCK:
+        results = [e for e in reversed(LOG_STORE)
+                   if (service is None or e["service"] == service)
+                   and (task_id is None or e["task_id"] == task_id)]
+
+    return {"count": len(results), "logs": results[:limit]}
+
+# ============================================================
+# CONTROL ENDPOINTS
+# ============================================================
+@app.post("/control/kill")
+async def control_kill(payload: dict, x_shiva_secret: str | None = Header(None)):
+    if not _auth_ok(x_shiva_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    action = payload.get("action", "").upper()
+    note = payload.get("note", "")
+
+    if action not in ("HALT", "RESUME"):
+        raise HTTPException(status_code=400, detail="action must be HALT or RESUME")
+
+    CONTROL_STATE["status"] = "HALT" if action == "HALT" else "OK"
+    CONTROL_STATE["updated_at"] = time.time()
+    CONTROL_STATE["note"] = note
+
+    entry = {
+        "ts": time.time(),
+        "service": "overseer",
+        "task_id": None,
+        "level": "CONTROL",
+        "message": f"Control action: {CONTROL_STATE['status']}",
+        "context": {"note": note}
+    }
+
+    with LOG_LOCK:
+        LOG_STORE.append(entry)
+
+    try:
+        asyncio.create_task(manager.broadcast({"type": "control", "state": CONTROL_STATE}))
+    except Exception:
+        pass
+
+    return {"status": CONTROL_STATE["status"], "note": note}
+
+@app.get("/control/status")
+async def control_status(x_shiva_secret: str | None = Header(None)):
+    if not _auth_ok(x_shiva_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return CONTROL_STATE
+
+# ============================================================
+# WEBSOCKET
+# ============================================================
 @app.websocket("/ws/logs")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_logs(ws: WebSocket):
+    await manager.connect(ws)
     try:
         while True:
-            await websocket.receive_text()
+            msg = await ws.receive_text()  # keep alive
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        print("[Overseer] Client disconnected from WebSocket.")
+        manager.disconnect(ws)
 
-# --- NEW: UI Proxy Endpoints (No auth) ---
-# These endpoints are called by the dashboard's JavaScript.
-# They securely call the Manager service with the API key.
-
-async def discover_manager() -> str:
-    """Internal helper to find the Manager"""
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.get(
-                f"{DIRECTORY_URL}/discover",
-                params={"service_name": "manager-service"},
-                headers=AUTH_HEADER
-            )
-            r.raise_for_status()
-            return r.json()["url"]
-        except Exception as e:
-            print(f"[Overseer] FAILED to discover Manager for UI: {e}")
-            raise HTTPException(500, detail="Could not discover Manager Service")
-
-@app.get("/ui/tasks", status_code=200)
-async def get_ui_tasks():
-    """Proxy for UI to fetch all tasks from Manager."""
-    try:
-        manager_url = await discover_manager()
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{manager_url}/tasks/list", headers=AUTH_HEADER)
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/ui/approve_task/{task_id}", status_code=202)
-async def approve_ui_task(task_id: str):
-    """Proxy for UI to approve a task on the Manager."""
-    try:
-        manager_url = await discover_manager()
-        async with httpx.AsyncClient() as client:
-            r = await client.post(f"{manager_url}/task/{task_id}/approve", headers=AUTH_HEADER)
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/ui/replan_task/{task_id}", status_code=202)
-async def replan_ui_task(task_id: str, request: ReplanRequest):
-    """Proxy for UI to replan a task on the Manager."""
-    try:
-        manager_url = await discover_manager()
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"{manager_url}/task/{task_id}/replan",
-                json=request.dict(),
-                headers=AUTH_HEADER
-            )
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        return {"error": str(e)}
-# --- END: UI Proxy Endpoints ---
-
-
-# --- Secure Internal Endpoints (Need auth) ---
-@app.post("/log/event", status_code=201)
-async def log_event(entry: LogEntry, api_key: str = Depends(get_api_key)):
-    log_data = entry.dict()
-    print(f"[Overseer] Log Received from {entry.service} (Task: {entry.task_id}): {entry.message}")
-    logs.append(log_data)
-    
-    await manager.broadcast(json.dumps(log_data))
-    
-    return {"status": "Logged", "log_id": len(logs) - 1}
-
-@app.get("/log/view", status_code=200)
-def view_logs(limit: int = 50, api_key: str = Depends(get_api_key)):
-    return logs[-limit:]
-
-@app.get("/control/status", status_code=200)
-def get_status(api_key: str = Depends(get_api_key)):
-    return {"status": status["system"]}
-
-@app.post("/control/kill", status_code=200)
-def kill_switch(api_key: str = Depends(get_api_key)):
-    print("[Overseer] !!! KILL SWITCH ACTIVATED !!!")
-    status["system"] = "HALT"
-    return {"status": "HALT", "message": "System halt signal issued"}
-
-@app.post("/control/resume", status_code=200)
-def resume_system(api_key: str = Depends(get_api_key)):
-    print("[Overseer] --- System Resumed ---")
-    status["system"] = "RUNNING"
-    return {"status": "RUNNING", "message": "System resume signal issued"}
-
-@app.get("/healthz", tags=["System"])
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+@app.get("/healthz")
 def healthz():
     return {"status": "ok", "service": SERVICE_NAME}
 
-
+# ============================================================
+# MAIN
+# ============================================================
 if __name__ == "__main__":
-    print(f"Starting Overseer Service on port {SERVICE_PORT}...")
-    print(f"Access the live dashboard at http://localhost:{SERVICE_PORT}")
+    print(f"Starting Overseer on 0.0.0.0:{SERVICE_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)

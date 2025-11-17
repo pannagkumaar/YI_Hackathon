@@ -3,6 +3,13 @@ import time
 import sys
 import atexit
 import os
+from dotenv import load_dotenv
+
+ROOT = os.path.dirname(os.path.realpath(__file__))
+os.chdir(ROOT)
+
+load_dotenv(os.path.join(ROOT, ".env.local"))
+print("[start_services] Loaded .env.local\n")
 
 # List of all 6 services.
 services = [
@@ -68,7 +75,7 @@ try:
         sys.exit(1)
     # --- END MODIFIED ---
 
-
+    
     for service in services:
         print(f"Starting {service}...")
         

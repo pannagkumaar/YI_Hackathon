@@ -3,10 +3,13 @@ import google.generativeai as genai
 import os
 import json
 from typing import List
-import dotenv
+from dotenv import load_dotenv
 
-dotenv.load_dotenv()
 
+ROOT = os.path.dirname(os.path.realpath(__file__))
+os.chdir(ROOT)
+
+load_dotenv(os.path.join(ROOT, ".env.local"))
 # 1. Configure the API key from an environment variable
 #    (Remember to set this in your terminal: export GOOGLE_API_KEY="your_api_key_here")
 GOOGLE_API_KEY =  os.getenv("GOOGLE_API_KEY")

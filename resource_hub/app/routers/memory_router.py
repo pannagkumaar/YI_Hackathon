@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, Depends, Body
 from app.core.db import save_short_term, get_short_term
 from app.core.config import settings
-from app.core.logging_client import send_log
+from core.logging_client import send_log
 import typing
 
 # --- Integration Fix ---

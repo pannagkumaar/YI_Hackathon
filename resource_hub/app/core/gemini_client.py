@@ -1,6 +1,13 @@
 import os
 import google.generativeai as genai
 from app.core.config import settings
+from dotenv import load_dotenv
+
+
+# Load .env and .env.local (if present)
+load_dotenv()
+if os.path.exists(".env.local"):
+    load_dotenv(".env.local")
 
 API_KEY = os.getenv("GOOGLE_API_KEY") or getattr(settings, "GOOGLE_API_KEY", None)
 if not API_KEY:

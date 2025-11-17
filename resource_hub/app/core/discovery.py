@@ -1,6 +1,6 @@
 import requests, time, asyncio
 from app.core.config import settings
-from app.core.logging_client import send_log
+from core.logging_client import send_log
 
 # --- Integration Fix ---
 # Define the authentication header using the shared secret from settings

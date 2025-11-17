@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 import json, os
 from app.core.config import settings
-from app.core.logging_client import send_log
+from core.logging_client import send_log
 
 router = APIRouter(prefix="/mock/itsm", tags=["MockITSM"])
 

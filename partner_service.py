@@ -1,327 +1,322 @@
-# 📄 partner_service.py
+# =============================================================
+#  PARTNER SERVICE — CLEAN, CORRECT, SHIVA-COMPLIANT VERSION
+# =============================================================
+
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-import uvicorn
-import requests  # Keep for synchronous registration
-import httpx     # Use for async calls
+import httpx
+import requests
 import threading
 import time
-import random # --- REMOVED: No longer needed for simulation ---
-from security import get_api_key
-from typing import List
-# --- NEW: Gemini Client Setup ---
-from gemini_client import get_model, generate_json
 import json
 import os
+from typing import List, Dict, Any
+import uvicorn
+from security import get_api_key
+from gemini_client import get_model, generate_json
 
+# -------------------------------------------------------------
+#  GEMINI LLM SETUP (ReAct Worker Model)
+# -------------------------------------------------------------
 PARTNER_SYSTEM_PROMPT = """
-You are "Partner," a ReAct-style AI worker agent for the SHIVA system.
-Your job is to achieve a "current_step_goal."
-You are given a "list of tools" (with name, description, and parameters) 
-and a "history" of your previous (Thought, Action, Observation) steps.
+You are Partner, a ReAct-style worker agent in the SHIVA system.
 
-You operate in two modes based on the "Prompt":
+You must respond ONLY in JSON.
 
-1.  When "Prompt: Reason":
-    * Analyze the goal, history (if any), and available tools.
-    * Formulate a "thought" (your reasoning).
-    * If the goal is already met (e.g., history shows success), your action MUST be "finish_goal" and "action_input" must be {}.
-    * Otherwise, select the *one* best "action" (a tool name from the list).
-    * Then, create the "action_input" (a JSON object matching the "parameters" for that tool).
-    * You MUST respond ONLY with a JSON object: 
-        {"thought": "...", "action": "...", "action_input": {...}}
+When prompt = "Reason":
+{
+  "thought": "<reasoning>",
+  "action": "<tool-name or 'finish_goal'>",
+  "action_input": {...}
+}
 
-2.  When "Prompt: Observe":
-    * You will be given the "action_result" (a JSON object with 'status' and 'output' or 'error').
-    * Summarize this result into a brief, natural language "observation".
-    * You MUST respond ONLY with a JSON object: 
-        {"observation": "..."}
+When prompt = "Observe":
+{
+  "observation": "<short summary>"
+}
 """
 partner_model = get_model(system_instruction=PARTNER_SYSTEM_PROMPT)
-# --- End Gemini Client Setup ---
 
-# --- Authentication & Service Constants (No change) ---
+# -------------------------------------------------------------
+#  FastAPI Initialization
+# -------------------------------------------------------------
 app = FastAPI(
     title="Partner Service",
-    description="ReAct Runtime worker for SHIVA.",
+    description="ReAct Runtime Worker for SHIVA.",
     dependencies=[Depends(get_api_key)]
 )
 
 API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
 AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
 DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
-OVERSEER_URL = os.getenv("OVERSEER_URL", "http://localhost:8004")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "partner-service")
+
+SERVICE_NAME = "partner"
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8002))
 
-# --- End Authentication & Service Constants ---
+# -------------------------------------------------------------
+#  DATA MODELS
+# -------------------------------------------------------------
+class ExecuteGoal(BaseModel):
+    task_id: str
+    current_step_goal: str
+    approved_plan: dict
+    context: dict = {}
 
+# -------------------------------------------------------------
+#  DISCOVERY + LOGGING
+# -------------------------------------------------------------
+async def discover(client: httpx.AsyncClient, service: str) -> str:
+    """Find service URL via Directory."""
+    r = await client.get(
+        f"{DIRECTORY_URL}/discover",
+        params={"service_name": service},
+        headers=AUTH_HEADER
+    )
+    if r.status_code != 200:
+        raise HTTPException(500, f"Failed to discover {service}: {r.text}")
+    return r.json()["url"]
 
-# --- Mock Agent Function (No change) ---
-def use_agent(prompt: str, goal: str, tools: List[dict], history: List[dict]) -> dict:
-    """(UPDATED) AI reasoning and observation using Gemini."""
-    print(f"[Partner] AI Agent called with prompt: {prompt}")
-    
-    if prompt == "Reason":
-        prompt_parts = [
-            f"Prompt: {prompt}\n",
-            f"Current Step Goal: {goal}\n",
-            # Pass the full tool definition, including parameters
-            f"Available Tools: {json.dumps(tools)}\n", 
-            f"Recent History: {json.dumps(history[-3:])}\n\n",
-            "Generate your JSON response (thought, action, action_input)."
-        ]
-        
-        response = generate_json(partner_model, prompt_parts)
-        
-        if "error" in response or "thought" not in response or "action" not in response:
-            print(f"[Partner] AI reasoning failed: {response.get('error', 'Invalid format')}")
-            return {"thought": "AI error, cannot proceed.", "action": "finish_goal", "action_input": {}}
-        
-        return response
-
-    if prompt == "Observe":
-        action_result = goal # 'goal' param is used to pass the result
-        prompt_parts = [
-            f"Prompt: {prompt}\n",
-            # The result is now a JSON object, not just a string
-            f"Action Result: {json.dumps(action_result)}\n\n",
-            "Generate your JSON observation (observation)."
-        ]
-        response = generate_json(partner_model, prompt_parts)
-
-        if "error" in response or "observation" not in response:
-            print(f"[Partner] AI observation failed: {response.get('error', 'Invalid format')}")
-            return {"observation": f"AI failed to generate observation for: {action_result}"}
-        
-        return response
-    
-    return {"output": "Mock AI response"} 
-# --- End Mock Agent Function ---
-
-
-# --- Service Discovery & Logging (No change) ---
-async def discover_async(client: httpx.AsyncClient, service_name: str) -> str:
-    print(f"[Partner] Discovering: {service_name}")
+async def log_overseer(client, task_id, level, message, context=None):
+    context = context or {}
     try:
-        r = await client.get(
-            f"{DIRECTORY_URL}/discover",
-            params={"service_name": service_name},
+        overseer = await discover(client, "overseer")
+        await client.post(
+            f"{overseer}/log/event",
+            json={
+                "service": SERVICE_NAME,
+                "task_id": task_id,
+                "level": level,
+                "message": message,
+                "context": context
+            },
             headers=AUTH_HEADER
         )
-        r.raise_for_status()
-        url = r.json()["url"]
-        print(f"[Partner] Discovered {service_name} at {url}")
-        return url
-    except (httpx.RequestError, httpx.HTTPStatusError) as e:
-        print(f"[Partner] FAILED to discover {service_name}: {e}")
-        raise HTTPException(500, detail=f"Could not discover {service_name}")
+    except Exception:
+        # Do not block execution if Overseer is down
+        pass
 
-async def log_to_overseer(client: httpx.AsyncClient, task_id: str, level: str, message: str, context: dict = {}):
+# -------------------------------------------------------------
+#  RESOURCE HUB HELPERS
+# -------------------------------------------------------------
+async def get_tools(client, task_id) -> List[Dict[str, Any]]:
+    hub = await discover(client, "resource_hub")
+    r = await client.get(f"{hub}/tools/list", headers=AUTH_HEADER)
+    if r.status_code != 200:
+        await log_overseer(client, task_id, "ERROR", "Failed to fetch tools from Resource Hub")
+        return []
+    return r.json().get("tools", [])
+
+async def execute_tool(client, task_id, action: str, params: dict):
+    hub = await discover(client, "resource_hub")
     try:
-        overseer_url = await discover_async(client, "overseer")
-        await client.post(f"{overseer_url}/log/event", json={
-            "service": SERVICE_NAME,
-            "task_id": task_id,
-            "level": level,
-            "message": message,
-            "context": context
-        }, headers=AUTH_HEADER)
+        r = await client.post(
+            f"{hub}/tools/execute",
+            json={"tool_name": action, "parameters": params, "task_id": task_id},
+            headers=AUTH_HEADER,
+            timeout=60
+        )
+        # If resource hub returns non-json, this will raise — handle below
+        return r.json()
     except Exception as e:
-        print(f"[Partner] FAILED to log to Overseer: {e}")
-# --- End Service Discovery & Logging ---
+        return {"status": "deviation", "error": f"Tool failed: {str(e)}"}
 
+# -------------------------------------------------------------
+#  LLM Reasoning Helpers
+# -------------------------------------------------------------
+def llm_reason(goal, tools, history) -> dict:
+    response = generate_json(
+        partner_model,
+        [
+            "Prompt: Reason",
+            f"Current Step Goal: {goal}",
+            f"Available Tools: {json.dumps(tools)}",
+            f"History: {json.dumps(history[-3:])}",
+        ]
+    )
+    if not isinstance(response, dict) or "thought" not in response or "action" not in response:
+        return {"thought": "LLM error", "action": "finish_goal", "action_input": {}}
+    return response
 
-# --- Resource Hub Helpers (No change) ---
-async def get_tools_from_hub(client: httpx.AsyncClient, task_id: str) -> List[dict]:
-    try:
-        hub_url = await discover_async(client, "resource-hub-service")
-        resp = await client.get(f"{hub_url}/tools/list", headers=AUTH_HEADER)
-        resp.raise_for_status()
-        await log_to_overseer(client, task_id, "INFO", "Successfully fetched tools from Resource Hub.")
-        # This now returns the tools *with parameter descriptions*
-        return resp.json().get("tools", [])
-    except Exception as e:
-        await log_to_overseer(client, task_id, "ERROR", f"Failed to fetch tools from Resource Hub: {e}")
-        return [] 
+def llm_observe(action_result) -> str:
+    response = generate_json(
+        partner_model,
+        [
+            "Prompt: Observe",
+            f"Action Result: {json.dumps(action_result)}",
+        ]
+    )
+    if not isinstance(response, dict):
+        return "No observation available."
+    return response.get("observation", "No observation available.")
 
-async def log_memory_to_hub(client: httpx.AsyncClient, task_id: str, thought: str, action: str, observation: str):
-    try:
-        hub_url = await discover_async(client, "resource-hub-service")
-        await client.post(f"{hub_url}/memory/{task_id}", json={
-            "thought": thought,
-            "action": action,
-            "observation": observation
-        }, headers=AUTH_HEADER)
-    except Exception as e:
-        await log_to_overseer(client, task_id, "WARN", f"Failed to log memory to Resource Hub: {e}")
-# --- END: Resource Hub Helpers ---
+# -------------------------------------------------------------
+#  MAIN EXECUTION LOOP
+# -------------------------------------------------------------
+@app.post("/partner/execute_goal")
+async def execute_goal(data: ExecuteGoal):
+    task_id = data.task_id
+    goal = data.current_step_goal
+    history = []
+    MAX_LOOPS = 6
 
+    async with httpx.AsyncClient(timeout=200) as client:
+        await log_overseer(client, task_id, "INFO", f"Executing goal: {goal}")
 
-# --- Service Registration (No change) ---
+        # Get tools
+        tools = await get_tools(client, task_id)
+        if not tools:
+            return {"task_id": task_id, "status": "FAILED", "reason": "No tools available"}
+
+        # ReAct Loop
+        for loop in range(MAX_LOOPS):
+
+            # 1. Reasoning
+            agent_step = llm_reason(goal, tools, history)
+            thought = agent_step.get("thought", "No thought")
+            action = agent_step.get("action", "finish_goal")
+            params = agent_step.get("action_input", {})
+
+            await log_overseer(client, task_id, "INFO", f"[Loop {loop+1}] Thought: {thought}", agent_step)
+
+            # FINISH GOAL
+            if action == "finish_goal":
+                observation = "Goal completed successfully."
+                history.append({"thought": thought, "action": "finish_goal", "observation": observation})
+                await log_overseer(client, task_id, "INFO", "Goal completed.")
+                return {"task_id": task_id, "status": "STEP_COMPLETED", "output": {"observation": observation}}
+
+            # 2. Guardian validation
+            guardian = await discover(client, "guardian")
+            try:
+                g_resp = await client.post(
+                    f"{guardian}/guardian/validate_action",
+                    json={
+                        "task_id": task_id,
+                        "proposed_action": action,
+                        "action_input": params,
+                        "context": data.context
+                    },
+                    headers=AUTH_HEADER,
+                    timeout=10
+                )
+            except Exception as e:
+                await log_overseer(client, task_id, "ERROR", f"Guardian contact failed: {e}")
+                return {"task_id": task_id, "status": "FAILED", "reason": "Guardian unreachable"}
+
+            # Handle guardian responses robustly
+            try:
+                g_json = g_resp.json()
+            except Exception:
+                await log_overseer(client, task_id, "ERROR", "Invalid response from Guardian")
+                return {"task_id": task_id, "status": "FAILED", "reason": "Invalid response from Guardian"}
+
+            if g_resp.status_code == 403 or g_json.get("decision") == "Deny":
+                await log_overseer(client, task_id, "WARN", "Guardian denied action", g_json)
+                return {
+                    "task_id": task_id,
+                    "status": "ACTION_REJECTED",
+                    "reason": g_json.get("reason", "Guardian denied action"),
+                    "details": g_json
+                }
+
+            if g_json.get("decision") == "Ambiguous":
+                await log_overseer(client, task_id, "INFO", "Guardian requested human approval", g_json)
+                return {
+                    "task_id": task_id,
+                    "status": "WAITING_APPROVAL",
+                    "reason": "Guardian requires human review",
+                    "details": g_json
+                }
+
+            await log_overseer(client, task_id, "INFO", "Guardian allowed action", g_json)
+
+            # 3. Execute Tool
+            tool_result = await execute_tool(client, task_id, action, params)
+
+            # Deviation check
+            if str(tool_result.get("status", "")).lower() == "deviation":
+                observation = llm_observe(tool_result)
+                history.append({
+                    "thought": thought,
+                    "action": action,
+                    "observation": observation
+                })
+                await log_overseer(client, task_id, "WARN", "Tool deviation detected", tool_result)
+                return {
+                    "task_id": task_id,
+                    "status": "DEVIATION_DETECTED",
+                    "reason": "Tool deviation",
+                    "details": tool_result
+                }
+
+            # 4. Observation
+            observation = llm_observe(tool_result)
+            history.append({
+                "thought": thought,
+                "action": action,
+                "observation": observation
+            })
+
+            # log success and continue to next loop
+            await log_overseer(client, task_id, "INFO", "Action executed successfully", {"tool_result": tool_result, "observation": observation})
+
+        # If we exit loop without finishing
+        await log_overseer(client, task_id, "ERROR", "Max loops exceeded without completion")
+        return {"task_id": task_id, "status": "FAILED", "reason": "Max loops exceeded"}
+
+# -------------------------------------------------------------
+#  HEALTH + REGISTRATION
+# -------------------------------------------------------------
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "service": SERVICE_NAME}
+
 def register_self():
     while True:
         try:
-            r = requests.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
+            r = requests.post(
+                f"{DIRECTORY_URL}/register",
+                json={
+                    "service_name": SERVICE_NAME,
+                    "service_url": f"http://localhost:{SERVICE_PORT}",
+                    "ttl_seconds": 60
+                },
+                headers=AUTH_HEADER,
+                timeout=5
+            )
             if r.status_code == 200:
-                print(f"[Partner] Successfully registered with Directory at {DIRECTORY_URL}")
+                print("[Partner] Registered with Directory.")
                 threading.Thread(target=heartbeat, daemon=True).start()
                 break
-            else:
-                print(f"[Partner] Failed to register. Status: {r.status_code}. Retrying in 5s...")
-        except requests.exceptions.ConnectionError:
-            print(f"[Partner] Could not connect to Directory. Retrying in 5s...")
+        except Exception:
+            pass
+        print("[Partner] Directory unavailable. Retrying...")
         time.sleep(5)
 
 def heartbeat():
     while True:
         time.sleep(45)
         try:
-            requests.post(f"{DIRECTORY_URL}/register", json={
-                "service_name": SERVICE_NAME,
-                "service_url": f"http://localhost:{SERVICE_PORT}",
-                "ttl_seconds": 60
-            }, headers=AUTH_HEADER)
-            print("[Partner] Heartbeat sent to Directory.")
-        except requests.exceptions.ConnectionError:
-            print("[Partner] Failed to send heartbeat. Will retry registration.")
+            requests.post(
+                f"{DIRECTORY_URL}/register",
+                json={
+                    "service_name": SERVICE_NAME,
+                    "service_url": f"http://localhost:{SERVICE_PORT}",
+                    "ttl_seconds": 60
+                },
+                headers=AUTH_HEADER,
+                timeout=5
+            )
+        except Exception:
+            # If heartbeat fails, attempt to re-register
             register_self()
-            break
+            return
 
 @app.on_event("startup")
-def on_startup():
+def on_start():
     threading.Thread(target=register_self, daemon=True).start()
-# --- End Service Registration ---
 
-class ExecuteGoal(BaseModel):
-    task_id: str
-    current_step_goal: str
-    approved_plan: dict
-    context: dict
-
-# --- UPDATED: Main ReAct Loop Endpoint ---
-@app.post("/partner/execute_goal", status_code=200)
-async def execute_goal(data: ExecuteGoal):
-    """Execute a full ReAct loop until the goal is completed or fails."""
-    
-    task_id = data.task_id
-    goal = data.current_step_goal
-    history = []
-    max_loops = 5 
-
-    async with httpx.AsyncClient(timeout=100.0) as client:
-        await log_to_overseer(client, task_id, "INFO", f"Starting ReAct loop for goal: {goal}")
-        
-        tools = await get_tools_from_hub(client, task_id)
-        if not tools:
-            await log_to_overseer(client, task_id, "ERROR", "No tools found. Cannot execute goal.")
-            return {"task_id": task_id, "status": "FAILED", "reason": "No tools available from Resource Hub"}
-
-        for i in range(max_loops):
-            # 1. Reason (No change)
-            reasoning = use_agent("Reason", goal, tools, history)
-            thought = reasoning.get("thought")
-            action = reasoning.get("action")
-            action_input = reasoning.get("action_input")
-            
-            await log_to_overseer(client, task_id, "INFO", f"[Loop {i+1}] Thought: {thought}", reasoning)
-
-            if action == "finish_goal":
-                await log_memory_to_hub(client, task_id, thought, "finish_goal", "Goal completed successfully.")
-                await log_to_overseer(client, task_id, "INFO", f"Goal completed: {goal}")
-                return {
-                    "task_id": task_id, 
-                    "status": "STEP_COMPLETED", 
-                    "output": {"observation": "Goal completed successfully."}
-                }
-            
-            # 2. Validate Action with Guardian (No change)
-            try:
-                guardian_url = await discover_async(client, "guardian-service")
-                g_resp = await client.post(f"{guardian_url}/guardian/validate_action", json={
-                    "task_id": task_id,
-                    "proposed_action": f"{action}:{action_input}",
-                    "context": data.context
-                }, headers=AUTH_HEADER)
-                g_resp.raise_for_status()
-
-                if g_resp.json()["decision"] != "Allow":
-                    reason = g_resp.json().get("reason", "Unknown reason")
-                    await log_to_overseer(client, task_id, "ERROR", f"Action validation FAILED: {reason}", g_resp.json())
-                    return {"task_id": task_id, "status": "ACTION_REJECTED", "reason": f"Guardian denied action: {reason}"}
-                
-                await log_to_overseer(client, task_id, "INFO", f"Action validation PASSED: {action}")
-            
-            except Exception as e:
-                await log_to_overseer(client, task_id, "ERROR", f"Failed to validate action with Guardian: {e}")
-                return {"task_id": task_id, "status": "FAILED", "reason": "Failed to contact Guardian"}
-
-            # 3. Act (Real) --- !!! THIS SECTION IS UPDATED !!! ---
-            await log_to_overseer(client, task_id, "INFO", f"Taking action: {action} with input {action_input}")
-            
-            try:
-                # Discover the Resource Hub to use its "Armory"
-                hub_url = await discover_async(client, "resource-hub-service")
-                
-                # Call the new /tools/execute endpoint
-                r_tool = await client.post(
-                    f"{hub_url}/tools/execute",
-                    json={
-                        "tool_name": action,
-                        "parameters": action_input,
-                        "task_id": task_id
-                    },
-                    headers=AUTH_HEADER,
-                    timeout=60.0 # Give the tool up to 60s to run
-                )
-                r_tool.raise_for_status() # Raise on 4xx/5xx
-                
-                # This is the 'action_result' payload (e.g., {"status": "...", "output": ...})
-                action_result_payload = r_tool.json()
-                action_status = action_result_payload.get("status", "deviation") # Default to deviation if status key is missing
-
-            except Exception as e:
-                # Handle network errors, timeouts, or 500 errors from the Hub
-                await log_to_overseer(client, task_id, "ERROR", f"Tool execution failed: {e}")
-                action_result_payload = {"status": "deviation", "error": f"Tool execution failed: {str(e)}"}
-                action_status = "deviation"
-            # --- END UPDATED SECTION ---
-
-            # 4. Observe (No change)
-            # Pass the rich dictionary payload to the observation model
-            observation = use_agent("Observe", action_result_payload, tools, history)
-            observation_text = observation.get('observation', 'No observation.')
-            await log_to_overseer(client, task_id, "INFO", f"Observation: {observation_text}", observation)
-            
-            # 5. Log to Memory (No change)
-            history.append({"thought": thought, "action": action, "observation": observation_text})
-            await log_memory_to_hub(client, task_id, thought, action, observation_text)
-            
-            # 6. Handle Deviation (No change)
-            # Check the status from our *real* tool execution
-            if action_status == "deviation":
-                await log_to_overseer(client, task_id, "WARN", "Deviation detected. Pausing task.")
-                return {
-                    "task_id": task_id, 
-                    "status": "DEVIATION_DETECTED", 
-                    "reason": "Unexpected deviation during tool execution",
-                    # 'observation' is the AI summary of the *detailed* error
-                    "details": observation 
-                }
-
-        # If loop finishes without completion
-        await log_to_overseer(client, task_id, "ERROR", "Task failed: Max loops exceeded.")
-        return {"task_id": task_id, "status": "FAILED", "reason": "Max loops exceeded"}
-# --- End ReAct Loop ---
-
-@app.get("/healthz", dependencies=[], tags=["System"])
-def healthz():
-    return {"status": "ok", "service": SERVICE_NAME}
-
+# -------------------------------------------------------------
 if __name__ == "__main__":
-    print("Starting Partner Service on port 8002...")
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)

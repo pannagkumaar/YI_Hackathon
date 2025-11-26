@@ -24,7 +24,7 @@ class Settings:
         self.SERVICE_BASE_URL = os.getenv("SERVICE_BASE_URL", default_base_url)
 
         # --- Networking URLs ---
-        self.DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://directory:8005")
+        self.DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005")
         self.OVERSEER_URL = os.getenv("OVERSEER_URL", "http://overseer:8004")
 
         # --- Data paths ---

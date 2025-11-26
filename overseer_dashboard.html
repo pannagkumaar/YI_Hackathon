@@ -1,430 +1,459 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Overseer Dashboard</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #e0e0e0;
-            display: flex;
-            margin: 0;
-            padding: 10px;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
-        .container {
-            flex: 1;
-            padding: 10px;
-            min-width: 45%; /* Prevents containers from becoming too small */
-        }
-        h1, h2 {
-            color: #00b8d4; /* Bright Cyan */
-            border-bottom: 2px solid #00b8d4;
-            padding-bottom: 8px;
-            font-weight: 500;
-        }
-        h2 {
-            color: #00e676; /* Bright Green */
-            border-bottom-color: #00e676;
-        }
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SHIVA Overseer — Dashboard (Option A)</title>
 
-        /* Log Panel */
-        #logs-container {
-            width: 98%;
-            height: 80vh;
-            overflow-y: scroll;
-            border: 1px solid #444;
-            background-color: #2a2a2a;
-            padding: 10px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-            font-size: 0.9em;
-        }
-        
-        .log-entry {
-            display: flex;
-            flex-wrap: wrap; /* Allows message to wrap */
-            padding: 5px 2px;
-            border-bottom: 1px solid #3a3a3a;
-            line-height: 1.6;
-        }
-        .log-entry:last-child {
-            border-bottom: none;
-        }
-        
-        /* Log Parts */
-        .log-time { color: #888; margin-right: 10px; }
-        .log-service { font-weight: bold; margin-right: 10px; }
-        .log-task { color: #aaa; margin-right: 10px; }
-        .log-level { font-weight: bold; margin-right: 10px; }
-        .log-message { 
-            color: #f0f0f0;
-            white-space: pre-wrap; 
-            word-break: break-all;
-            flex-basis: 100%; /* Message takes its own line */
-            padding-left: 10px;
-            margin-top: 4px;
-        }
-        
-        /* Log Level Colors */
-        .log-level.INFO { color: #28a745; }
-        .log-level.WARN { color: #ffc107; }
-        .log-level.ERROR { color: #dc3545; }
-        .log-entry.ERROR { background-color: rgba(220, 53, 69, 0.05); border-left: 3px solid #dc3545; }
-        .log-entry.WARN { background-color: rgba(255, 193, 7, 0.05); border-left: 3px solid #ffc107; }
+  <style>
+    :root{
+      --bg:#0f1216;
+      --panel:#12151a;
+      --muted:#9aa5b1;
+      --accent-cyan:#00b8d4;
+      --accent-green:#00e676;
+      --accent-amber:#ffb300;
+      --glass: rgba(255,255,255,0.02);
+      --card:#14171b;
+      --shadow: 0 8px 30px rgba(2,6,23,0.6);
+      --mono: "SFMono-Regular", Menlo, Monaco, "Roboto Mono", monospace;
+    }
 
-        /* Service Colors for Distinguishability */
-        .service-manager-service { color: #00b8d4; } /* Cyan */
-        .service-partner-service { color: #00e676; } /* Green */
-        .service-guardian-service { color: #ffab00; } /* Amber */
-        .service-overseer-service { color: #7c4dff; } /* Deep Purple */
-        .service-resource-hub-service { color: #2979ff; } /* Blue */
-        .service-directory-service { color: #9e9e9e; } /* Grey */
-        .service-unknown { color: #f50057; } /* Pink */
-        
-        /* Task Panel */
-        #tasks {
-            width: 98%;
-            height: 80vh;
-            overflow-y: scroll;
-            border: 1px solid #444;
-            background-color: #2a2a2a;
-            padding: 10px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        }
-        .task-card {
-            border: 1px solid #555;
-            background-color: #333;
-            padding: 12px 15px;
-            margin-bottom: 12px;
-            border-radius: 6px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            transition: all 0.2s ease-in-out;
-        }
-        .task-card:hover {
-            border-color: #777;
-        }
-        .task-card h3 {
-            margin: 0 0 8px 0;
-            color: #eee;
-        }
-        .task-card p {
-            margin: 4px 0;
-        }
-        .task-id {
-            font-size: 0.85em;
-            color: #999;
-            font-family: monospace;
-        }
-        .task-status {
-            font-weight: bold;
-            font-size: 1.1em;
-            text-transform: uppercase;
-            padding: 2px 0;
-        }
-        
-        /* Status Colors */
-        .PENDING, .STARTING, .PLANNING, .CHECKING_HALT, .VALIDATING_PLAN, .RESUMING, .REPLANNING { color: #00b8d4; } /* Cyan */
-        .EXECUTING_STEP { color: #00e676; } /* Green */
-        .PAUSED_DEVIATION, .ACTION_REJECTED, .REJECTED { color: #ffab00; } /* Amber */
-        .FAILED { color: #dc3545; } /* Red */
-        .COMPLETED { color: #28a745; } /* Darker Green */
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#081018 0%, #0b0f14 100%);font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+    .app {
+      display:grid;
+      grid-template-columns: 460px 1fr 420px;
+      grid-template-rows: 72px 1fr;
+      gap:18px;
+      padding:20px;
+      height:100vh;
+      box-sizing:border-box;
+    }
 
-        /* --- UPDATED: Make the context box pop --- */
-        .deviation-details {
-            background-color: #fffbe6; /* Light cream/yellow */
-            color: #5d4037; /* Dark brown/grey text for readability */
-            padding: 10px 12px;
-            border-radius: 4px;
-            font-family: monospace;
-            white-space: pre-wrap; /* Show newlines */
-            word-break: break-all;
-            margin-top: 12px;
-            border: 1px solid #ffecb3; /* Lighter border */
-            border-left: 5px solid #ffab00; /* Main amber accent */
-        }
-        
-        /* --- NEW: Class for the reason text --- */
-        .task-reason {
-            color: #ffc107; /* Amber */
-            font-weight: 600; /* Bolder */
-            margin-top: 8px !important;
-        }
+    /* Header - spans all columns */
+    header {
+      grid-column: 1 / -1;
+      display:flex;
+      align-items:center;
+      gap:16px;
+      padding:12px 18px;
+      background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border-radius:10px;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255,255,255,0.03);
+      backdrop-filter: blur(6px);
+    }
+    .brand {
+      display:flex;
+      align-items:center;
+      gap:12px;
+    }
+    .logo {
+      width:44px;height:44px;border-radius:8px;background:linear-gradient(135deg,var(--accent-cyan),#6fe7ff);display:flex;align-items:center;justify-content:center;font-weight:700;color:#021018;
+      box-shadow: 0 6px 20px rgba(0,184,212,0.12);
+      overflow:hidden;
+    }
+    .brand h1{margin:0;font-size:18px;color:#e7fbff;letter-spacing:0.2px}
+    .brand p{margin:0;font-size:12px;color:var(--muted)}
 
-        /* --- UPDATED BUTTON LOGIC --- */
-        
-        /* Base button style (no background) */
-        button {
-            color: #fff;
-            border: none;
-            padding: 8px 14px;
-            cursor: pointer;
-            border-radius: 5px;
-            font-weight: 600;
-            font-size: 0.9em;
-            transition: all 0.2s ease;
-            margin-top: 5px;
-            margin-right: 5px;
-        }
-        button:hover {
-            opacity: 0.85;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        }
+    /* Small controls */
+    .header-controls {
+      margin-left:auto;
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .pill {
+      background:var(--glass);
+      border:1px solid rgba(255,255,255,0.03);
+      padding:8px 12px;
+      border-radius:999px;
+      color:var(--muted);
+      font-size:13px;
+    }
 
-        /* Specific button classes */
-        button.approve-go {
-            background-color: #28a745; /* Green */
-            color: #fff;
-        }
-        button.approve-go:hover {
-            background-color: #218838;
-        }
+    /* Left: Tasks */
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.012), rgba(255,255,255,0.01));
+      border-radius:12px;
+      padding:14px;
+      box-shadow: var(--shadow);
+      border:1px solid rgba(255,255,255,0.03);
+      color:#e6f2f8;
+      overflow:auto;
+    }
 
-        button.approve-warn {
-            background-color: #00b8d4; /* Cyan (matches status) */
-            color: #fff;
-        }
-        button.approve-warn:hover {
-            background-color: #0097a7;
-        }
+    .panel h2 { margin:0 0 12px 0; color:var(--accent-cyan); font-size:16px; display:flex; align-items:center; gap:8px; }
+    .task-list { display:flex; flex-direction:column; gap:12px; }
 
-        button.replan {
-            background-color: #ffc107; /* Yellow */
-            color: #212529; /* Dark text for yellow button */
-        }
-        button.replan:hover {
-            background-color: #ffb300;
-        }
-    </style>
+    .task-card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));
+      border-radius:10px;
+      padding:12px;
+      border:1px solid rgba(255,255,255,0.02);
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      transition:transform .12s ease, box-shadow .12s ease;
+    }
+    .task-card:hover { transform: translateY(-3px); box-shadow: 0 14px 30px rgba(2,6,23,0.55); }
+
+    .task-top { display:flex; justify-content:space-between; align-items:start; gap:8px; }
+    .task-title { font-weight:600; font-size:15px; margin:0; color:#eafcff; }
+    .task-meta { font-size:12px; color:var(--muted); font-family:var(--mono); }
+
+    .task-body { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    .task-status { padding:6px 10px; border-radius:999px; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.6px; }
+    .status-PENDING{ background: rgba(0,184,212,0.08); color:var(--accent-cyan); border:1px solid rgba(0,184,212,0.06); }
+    .status-WAITING_APPROVAL{ background: rgba(255,179,0,0.06); color:var(--accent-amber); border:1px solid rgba(255,179,0,0.06); }
+    .status-EXECUTING_STEP_1{ background: rgba(0,230,118,0.06); color:var(--accent-green); border:1px solid rgba(0,230,118,0.06); }
+    .status-FAILED{ background: rgba(220,53,69,0.06); color:#ff6b6b; border:1px solid rgba(220,53,69,0.06); }
+    .status-COMPLETED{ background: rgba(40,167,69,0.06); color:#b6f6c3; border:1px solid rgba(40,167,69,0.06); }
+
+    .task-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    button.btn {
+      padding:8px 12px;border-radius:8px;border:none;cursor:pointer;font-weight:700;font-size:13px;
+      transition:transform .12s ease, box-shadow .12s ease;
+      background:transparent;border:1px solid rgba(255,255,255,0.04); color:#eafcff;
+    }
+    button.btn:hover { transform:translateY(-2px); box-shadow:0 8px 22px rgba(2,6,23,.45); }
+    .btn-approve{ background: linear-gradient(90deg,var(--accent-green), #4dffa6); color:#021710; border: none; }
+    .btn-replan{ background: linear-gradient(90deg,#ffd86b, var(--accent-amber)); color:#091006; border:none; }
+    .btn-debug{ background: linear-gradient(90deg,#6fe7ff, var(--accent-cyan)); color:#011216; border:none; }
+
+    .task-reason { color: #ffd89b; font-weight:600; font-size:13px; margin-top:4px; font-family:var(--mono); }
+
+    /* Middle: big live console / details */
+    .center {
+      display:flex; flex-direction:column; gap:12px;
+    }
+    .panel-console { flex:1; display:flex; flex-direction:column; gap:12px; height: calc(100vh - 160px); }
+    .console-top { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .console {
+      background:#091018; border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.03); flex:1; overflow:auto; font-family:var(--mono); font-size:13px; color:#dff6ff;
+      box-shadow: var(--shadow);
+    }
+    .console .line { white-space:pre-wrap; padding:6px 8px; border-bottom:1px dashed rgba(255,255,255,0.02); }
+    .console .meta { color:var(--muted); font-size:12px; }
+
+    /* right: logs stream */
+    .panel-logs { display:flex; flex-direction:column; gap:12px; height:100%; }
+    .log-list { overflow:auto; height: calc(100vh - 140px); border-radius:10px; padding:10px; background:linear-gradient(180deg,#071015,#0a1116); border:1px solid rgba(255,255,255,0.03); box-shadow:var(--shadow); }
+    .log-entry { padding:8px 10px; margin-bottom:8px; border-radius:8px; display:flex; gap:10px; align-items:flex-start; }
+    .log-time{ color:var(--muted); min-width:64px; font-family:var(--mono); font-size:12px; }
+    .log-service{ font-weight:700; color:#c8f8ff; font-size:12px; min-width:110px; }
+    .log-level.INFO{ color: #28a745; font-weight:800; }
+    .log-level.WARN{ color: #ffc107; font-weight:800; }
+    .log-level.ERROR{ color: #ff6b6b; font-weight:800; }
+    .log-message{ color:#e6f7ff; font-size:13px; line-height:1.35; white-space:pre-wrap; flex:1; }
+
+    /* footer small */
+    footer { grid-column: 1 / -1; text-align:center; color:var(--muted); font-size:13px; margin-top:6px; }
+
+    /* Responsive */
+    @media (max-width:1100px){
+      .app { grid-template-columns: 1fr; grid-template-rows:72px auto auto; padding:12px; }
+      .panel-logs { order:3 }
+      .center { order:2 }
+      .panel { order:1 }
+    }
+  </style>
 </head>
 <body>
-    <!-- Insert near top of body -->
-    <div id="memory-stats" style="padding:8px;border:1px solid #ddd;margin-bottom:12px;">
-    Memory: short-term: <span id="mem-short">-</span>,
-    long-term: <span id="mem-long">-</span>,
-    last-updated: <span id="mem-last">-</span>
-    </div>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo" id="logo">
+          <!-- Use uploaded asset path as background image if it points to an image; we keep it fallback-safe -->
+          <img id="asset-logo" src="/mnt/data/GPT-UPLOAD.zip" alt="asset" style="width:100%; height:100%; object-fit:cover; display:block;">
+        </div>
+        <div>
+          <h1>SHIVA Overseer</h1>
+          <p>Live control & monitoring • Manager · Partner · Guardian · Resource Hub</p>
+        </div>
+      </div>
 
-    <script>
-    const SHARED_SECRET = "dev-secret"; // or fetch from safe place
+      <div class="header-controls">
+        <div class="pill" id="mem-summary">Memory — short: - • long: -</div>
+        <div class="pill" id="svc-health">All services: <span style="color:var(--accent-cyan)">checking…</span></div>
+      </div>
+    </header>
+
+    <!-- Left: tasks -->
+    <section class="panel" aria-labelledby="tasksHeading">
+      <h2>⚡ Tasks</h2>
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <input id="filter-input" placeholder="Filter by status / id / goal" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:#dffaff">
+        <button class="btn btn-debug" onclick="fetchTasks()">Refresh</button>
+      </div>
+
+      <div class="task-list" id="task-list">
+        <div style="color:var(--muted);font-size:13px;">Loading tasks…</div>
+      </div>
+    </section>
+
+    <!-- Middle: Console / Task detail -->
+    <section class="center">
+      <div class="panel panel-console">
+        <div class="console-top">
+          <h2 style="margin:0;color:var(--accent-cyan)">🧭 Activity Console</h2>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div class="pill" id="console-state">WS: disconnected</div>
+            <div class="pill" id="last-log-ts">Last log: -</div>
+          </div>
+        </div>
+
+        <div class="console" id="console">
+          <div class="line meta">Console ready — waiting for live input (logs + task updates).</div>
+        </div>
+      </div>
+
+      <div class="panel" style="display:flex;gap:12px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;gap:12px;align-items:center">
+          <div style="font-weight:700;color:var(--muted)">Quick actions</div>
+          <button class="btn btn-approve" onclick="runSmoke()">Run smoke test</button>
+          <button class="btn btn-replan" onclick="manualNewTask()">Start new task</button>
+        </div>
+        <div style="color:var(--muted);font-family:var(--mono);font-size:13px">Operator: <strong>admin</strong></div>
+      </div>
+    </section>
+
+    <!-- Right: Live Logs -->
+    <aside class="panel panel-logs">
+      <h2>📡 Logs</h2>
+      <div class="log-list" id="log-list" aria-live="polite"></div>
+    </aside>
+
+    <footer>
+      SHIVA Overseer — Local UI • <span id="build-info">build: dev</span>
+    </footer>
+  </div>
+
+  <script>
+    // ---------- CONFIG ----------
+    const FILE_ASSET_URL = "/mnt/data/GPT-UPLOAD.zip"; // original uploaded file path (as requested)
+    const WS_PATH = `/ws/logs`;           // websocket for logs
+    const TASKS_URL = `/ui/tasks`;        // GET - list tasks
+    const APPROVE_URL = (id) => `/ui/approve_task/${encodeURIComponent(id)}`; // POST
+    const REPLAN_URL = (id) => `/ui/replan_task/${encodeURIComponent(id)}`;   // POST
+    const MEMORY_URL = `/memory/stats`;   // GET
+    const POLL_INTERVAL = 2000;
+
+    // ---------- ELEMENTS ----------
+    const taskListEl = document.getElementById('task-list');
+    const consoleEl = document.getElementById('console');
+    const logListEl = document.getElementById('log-list');
+    const memSummaryEl = document.getElementById('mem-summary');
+    const svcHealthEl = document.getElementById('svc-health');
+    const consoleState = document.getElementById('console-state');
+    const lastLogTs = document.getElementById('last-log-ts');
+    const filterInput = document.getElementById('filter-input');
+
+    // ---------- WebSocket: logs ----------
+    let ws;
+    function connectWS(){
+      try {
+        ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + WS_PATH);
+      } catch(e) {
+        addConsoleLine('ERROR: WebSocket init failed: ' + e, 'ERROR');
+        return;
+      }
+      consoleState.textContent = 'WS: connecting...';
+      ws.onopen = () => {
+        consoleState.textContent = 'WS: connected';
+        consoleState.style.color = '#00e676';
+        addConsoleLine('WebSocket connected — listening for log events', 'INFO');
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          renderLogEntry(data);
+          addConsoleLine(`[${data.service || 'N/A'}] ${data.level || 'INFO'}: ${data.message}`, data.level || 'INFO');
+          lastLogTs.textContent = 'Last log: ' + new Date().toLocaleTimeString();
+        } catch(e){
+          addConsoleLine('Malformed WS message: ' + ev.data, 'WARN');
+        }
+      };
+      ws.onclose = () => {
+        consoleState.textContent = 'WS: disconnected';
+        consoleState.style.color = '#ff6b6b';
+        addConsoleLine('WebSocket disconnected — retrying in 3s', 'WARN');
+        setTimeout(connectWS, 3000);
+      };
+      ws.onerror = (err) => {
+        addConsoleLine('WebSocket error: ' + (err?.message || JSON.stringify(err)), 'ERROR');
+        ws.close();
+      };
+    }
+
+    // ---------- Helpers ----------
+    function addConsoleLine(text, level='INFO'){
+      const d = document.createElement('div');
+      d.className = 'line';
+      d.innerHTML = `<span style="color:var(--muted);font-family:var(--mono);font-size:12px">[${new Date().toLocaleTimeString()}]</span> &nbsp; <strong style="color:#dff6ff">${escapeHtml(text)}</strong>`;
+      consoleEl.appendChild(d);
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function renderLogEntry(log){
+      const row = document.createElement('div');
+      row.className = 'log-entry';
+      const time = document.createElement('div'); time.className='log-time'; time.textContent = new Date().toLocaleTimeString();
+      const svc = document.createElement('div'); svc.className='log-service'; svc.textContent = log.service || 'unknown';
+      const level = document.createElement('div'); level.className = 'log-level ' + (log.level || 'INFO'); level.textContent = (log.level || 'INFO');
+      const msg = document.createElement('div'); msg.className='log-message'; msg.textContent = log.message || JSON.stringify(log.context || {});
+      row.append(time, svc, level, msg);
+      logListEl.prepend(row); // newest first
+      // limit length
+      if (logListEl.children.length > 300) logListEl.removeChild(logListEl.lastElementChild);
+    }
+
+    function escapeHtml(s){ return String(s).replace(/[&<>"'`]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'})[c]); }
+
+    // ---------- Tasks fetched & rendered ----------
+    let allTasks = [];
+    async function fetchTasks(){
+      try {
+        const r = await fetch(TASKS_URL);
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        const tasks = await r.json();
+        allTasks = Array.isArray(tasks) ? tasks : [];
+        renderTasks();
+      } catch(e){
+        taskListEl.innerHTML = `<div style="color:#ffb3a7">Failed to fetch tasks: ${escapeHtml(e.message || e)}</div>`;
+      }
+    }
+
+    function renderTasks(){
+      const q = filterInput.value.trim().toLowerCase();
+      const filtered = allTasks.filter(t => {
+        if(!q) return true;
+        return (t.task_id||'').toLowerCase().includes(q) || (t.status||'').toLowerCase().includes(q) || (t.goal||'').toLowerCase().includes(q);
+      });
+
+      if(filtered.length === 0){
+        taskListEl.innerHTML = `<div style="color:var(--muted);font-size:13px">No tasks found.</div>`;
+        return;
+      }
+
+      taskListEl.innerHTML = '';
+      filtered.forEach(t => {
+        const card = document.createElement('div');
+        card.className = 'task-card';
+
+        const statusClass = t.status && t.status.startsWith('EXECUTING_STEP') ? 'EXECUTING_STEP_1' : t.status || 'PENDING';
+
+        const top = document.createElement('div'); top.className='task-top';
+        const title = document.createElement('div'); title.innerHTML = `<h3 class="task-title">${escapeHtml(t.goal||'Untitled')}</h3><div class="task-meta">${escapeHtml(t.task_id||'')}</div>`;
+        const meta = document.createElement('div'); meta.innerHTML = `<div class="task-status status-${statusClass}">${escapeHtml(t.status||'PENDING')}</div>`;
+        top.append(title, meta);
+
+        const body = document.createElement('div'); body.className='task-body';
+        const left = document.createElement('div');
+        left.innerHTML = t.reason ? `<div class="task-reason">Reason: ${escapeHtml(t.reason)}</div>` : `<div style="color:var(--muted);font-size:13px">Step: ${t.current_step_index ?? 0}</div>`;
+
+        const actions = document.createElement('div'); actions.className='task-actions';
+
+        if (["WAITING_APPROVAL"].includes(t.status)) {
+          const aBtn = document.createElement('button'); aBtn.className='btn btn-approve'; aBtn.innerText='Approve & Resume';
+          aBtn.onclick = () => approveTask(t.task_id);
+          actions.appendChild(aBtn);
+        }
+        if (["FAILED","REJECTED","ACTION_REJECTED"].includes(t.status)) {
+          const retry = document.createElement('button'); retry.className='btn btn-debug'; retry.innerText='Retry';
+          retry.onclick = () => approveTask(t.task_id); // reuse approve endpoint in local flow
+          actions.appendChild(retry);
+        }
+
+        const replan = document.createElement('button'); replan.className='btn btn-replan'; replan.innerText='Replan';
+        replan.onclick = () => replanTaskPrompt(t.task_id);
+        actions.appendChild(replan);
+
+        body.append(left, actions);
+
+        card.append(top, body);
+
+        taskListEl.appendChild(card);
+      });
+    }
+
+    // ---------- Actions ----------
+    async function approveTask(taskId){
+      try {
+        addConsoleLine(`Approving ${taskId} ...`, 'INFO');
+        await fetch(APPROVE_URL(taskId), {method:'POST'});
+        await fetchTasks();
+      } catch(e){ addConsoleLine('Approve failed: '+e, 'ERROR'); }
+    }
+
+    async function replanTaskPrompt(taskId){
+      const g = prompt('New goal (leave blank to cancel):', 'Investigate and fix deviation');
+      if(!g) return;
+      try {
+        await fetch(REPLAN_URL(taskId), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ goal: g, context:{operator:'ui'} }) });
+        addConsoleLine('Replan requested', 'INFO');
+        await fetchTasks();
+      } catch(e){ addConsoleLine('Replan failed: '+e, 'ERROR'); }
+    }
+
+    // Quick: create new task
+    async function manualNewTask(){
+      const goal = prompt('Enter new task goal','Check connectivity to 8.8.8.8');
+      if(!goal) return;
+      try {
+        const r = await fetch('/invoke', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ goal, context:{} })});
+        if(!r.ok) throw new Error('invoke failed ' + r.status);
+        const j = await r.json();
+        addConsoleLine('Started task ' + (j.task_id||'?'), 'INFO');
+        await fetchTasks();
+      } catch(e){ addConsoleLine('Start failed: '+e, 'ERROR'); }
+    }
+
+    async function runSmoke(){
+      addConsoleLine('Running smoke test (invoke & poll)...', 'INFO');
+      await manualNewTask();
+    }
+
+    // ---------- Memory + health polling ----------
     async function fetchMemoryStats(){
-    try{
-        const resp = await fetch("/memory/stats", { headers: { "Authorization": `Bearer ${SHARED_SECRET}` }});
-        if(!resp.ok) return;
-        const j = await resp.json();
-        document.getElementById("mem-short").innerText = j.short_term_count ?? 0;
-        document.getElementById("mem-long").innerText = j.long_term_count ?? 0;
-        document.getElementById("mem-last").innerText = new Date((j.last_updated||0)*1000).toLocaleString();
-    }catch(e){
-        console.warn("memory stats fetch failed", e);
+      try {
+        const r = await fetch(MEMORY_URL);
+        if(!r.ok) throw new Error('no memory');
+        const j = await r.json();
+        memSummaryEl.textContent = `Memory — short: ${j.short_term_count ?? 0} • long: ${j.long_term_count ?? 0}`;
+      } catch(e){
+        // not fatal
+      }
     }
+
+    async function checkServices(){
+      try{
+        const r = await fetch('/services/healthz');
+        if(r.ok){
+          svcHealthEl.innerHTML = 'All services: <span style="color:var(--accent-green)">OK</span>';
+        } else {
+          svcHealthEl.innerHTML = 'All services: <span style="color:#ffab00">Partial</span>';
+        }
+      }catch(e){
+        svcHealthEl.innerHTML = 'All services: <span style="color:#ff6b6b">Down</span>';
+      }
     }
+
+    // ---------- init ----------
+    connectWS();
+    fetchTasks();
+    setInterval(fetchTasks, POLL_INTERVAL);
     setInterval(fetchMemoryStats, 10000);
-    fetchMemoryStats();
-    </script>
+    setInterval(checkServices, 12000);
+    filterInput.addEventListener('input', () => renderTasks());
 
-    <div class="container">
-        <h2>👨‍💼 Task Dashboard (Refreshes every 2s)</h2>
-        <div id="tasks">
-            <pre>Loading tasks...</pre>
-        </div>
-    </div>
-
-    <div class="container">
-        <h1>🛰️ Overseer - Live Log Stream</h1>
-        <div id="logs-container">
-            <pre id="status" style="color: #00b8d4;">Connecting to WebSocket...</pre>
-        </div>
-    </div>
-
-    <script>
-        const logsContainer = document.getElementById("logs-container");
-        const statusElement = document.getElementById("status");
-        const tasksContainer = document.getElementById("tasks");
-
-        // --- 1. Log WebSocket ---
-        const ws = new WebSocket(`ws://${window.location.host}/ws/logs`);
-        ws.onopen = () => {
-            statusElement.textContent = "Connected. Waiting for logs...";
-            statusElement.style.color = "#28a745";
-        };
-        
-        ws.onmessage = (event) => {
-            if (statusElement) {
-                statusElement.remove();
-            }
-            
-            const logData = JSON.parse(event.data);
-            
-            // Create structured log entry
-            const logElement = document.createElement("div");
-            logElement.className = "log-entry";
-            if (logData.level) {
-                logElement.classList.add(logData.level);
-            }
-
-            const time = new Date().toLocaleTimeString();
-            const timeSpan = document.createElement("span");
-            timeSpan.className = "log-time";
-            timeSpan.textContent = time;
-
-            const serviceSpan = document.createElement("span");
-            serviceSpan.className = `log-service service-${logData.service || 'unknown'}`;
-            serviceSpan.textContent = `[${logData.service || 'N/A'}]`;
-
-            const taskSpan = document.createElement("span");
-            taskSpan.className = "log-task";
-            taskSpan.textContent = `[${logData.task_id || 'N/A'}]`;
-
-            const levelSpan = document.createElement("span");
-            levelSpan.className = `log-level ${logData.level || 'INFO'}`;
-            levelSpan.textContent = logData.level || 'INFO';
-
-            const msgSpan = document.createElement("span");
-            msgSpan.className = "log-message";
-            msgSpan.textContent = logData.message;
-
-            logElement.append(timeSpan, serviceSpan, taskSpan, levelSpan, msgSpan);
-            logsContainer.appendChild(logElement);
-            logsContainer.scrollTop = logsContainer.scrollHeight;
-        };
-        
-        ws.onclose = () => {
-            const errorElement = document.createElement("div");
-            errorElement.className = "log-entry ERROR";
-            errorElement.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket disconnected. Please refresh.</span>`;
-            logsContainer.appendChild(errorElement);
-        };
-        ws.onerror = (error) => {
-            const errorElement = document.createElement("div");
-            errorElement.className = "log-entry ERROR";
-            errorElement.innerHTML = `<span class="log-level ERROR">FATAL</span> <span class="log-message">WebSocket connection error.</span>`;
-            logsContainer.appendChild(errorElement);
-        };
-
-        // --- 2. Task Dashboard Polling ---
-        setInterval(fetchTasks, 2000);
-
-        async function fetchTasks() {
-            try {
-                const response = await fetch("/ui/tasks");
-                const tasks = await response.json();
-                
-                if (!Array.isArray(tasks)) {
-                    tasksContainer.innerHTML = `<pre style="color: #dc3545;">Error loading tasks: ${tasks.error || 'Unknown error'}</pre>`;
-                    return;
-                }
-                
-                tasksContainer.innerHTML = ""; // Clear old tasks
-                if (tasks.length === 0) {
-                    tasksContainer.innerHTML = `<pre style="color: #aaa;">No tasks submitted yet.</pre>`;
-                    return;
-                }
-
-                // Sort tasks: Paused/Failed first
-                tasks.sort((a, b) => {
-                    const statusA = a.status.toUpperCase();
-                    const statusB = b.status.toUpperCase();
-                    const isPausedA = statusA.includes("PAUSED") || statusA.includes("REJECTED") || statusA.includes("FAILED");
-                    const isPausedB = statusB.includes("PAUSED") || statusB.includes("REJECTED") || statusB.includes("FAILED");
-
-                    if (isPausedA && !isPausedB) return -1;
-                    if (!isPausedA && isPausedB) return 1;
-                    return 0;
-                });
-
-                tasks.forEach(task => {
-                    tasksContainer.appendChild(createTaskCard(task));
-                });
-
-            } catch (error) {
-                tasksContainer.innerHTML = `<pre style="color: #dc3545;">Failed to fetch tasks: ${error}</pre>`;
-            }
-        }
-
-        // --- 3. createTaskCard (!!! UPDATED !!!) ---
-        function createTaskCard(task) {
-            const card = document.createElement("div");
-            card.className = "task-card";
-
-            const statusClass = task.status.startsWith("EXECUTING_STEP") ? "EXECUTING_STEP" : task.status;
-            
-            let buttons = "";
-            // Check if task is in a state that allows user action
-            if (task.status === "PAUSED_DEVIATION" || task.status === "ACTION_REJECTED" || task.status === "REJECTED" || task.status === "FAILED") {
-                
-                let approveClass = "approve-go"; // Default to green
-                let approveText = "Approve/Resume";
-                
-                // If task FAILED or was REJECTED, button is blue and says "Retry"
-                if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
-                    approveClass = "approve-warn"; // New blue class
-                    approveText = "Retry/Resume";  // New text
-                }
-
-                buttons = `
-                    <p>
-                        <button class="${approveClass}" onclick="approveTask('${task.task_id}')">${approveText}</button>
-                        <button class="replan" onclick="replanTask('${task.task_id}')">Replan Task</button>
-                    </p>
-                `;
-            }
-
-            // Use the new .task-reason class for the reason
-            const reasonHtml = task.reason ? `<p class="task-reason">Reason: ${task.reason}</p>` : "";
-
-            // Check for and render the detailed observation
-            const details = task.deviation_details;
-            let detailsHtml = "";
-            if (details && details.observation) {
-                // Escape HTML to prevent XSS
-                const safeObservation = document.createElement("div");
-                safeObservation.innerText = details.observation;
-                detailsHtml = `<pre class="deviation-details">Context: ${safeObservation.innerHTML}</pre>`;
-            
-            } else if (task.status === "FAILED" || task.status === "REJECTED" || task.status === "ACTION_REJECTED") {
-                 // Show box even if no details, to be consistent
-                 detailsHtml = `<pre class="deviation-details">Context: No specific details provided.</pre>`;
-            }
-
-            card.innerHTML = `
-                <h3>${task.goal}</h3>
-                <p class="task-id">${task.task_id}</p>
-                <p>Status: <span class="task-status ${statusClass}">${task.status}</span></p>
-                ${reasonHtml}
-                ${detailsHtml} ${buttons}
-            `;
-            return card;
-        }
-
-        // --- 4. UI Action Handlers ---
-        async function approveTask(taskId) {
-            console.log(`Approving ${taskId}...`);
-            await fetch(`/ui/approve_task/${taskId}`, { method: "POST" });
-            fetchTasks(); // Refresh list immediately
-        }
-
-        async function replanTask(taskId) {
-            console.log(`Replanning ${taskId}...`);
-            const newGoal = prompt("Enter the new goal for this task:", "Fix the deviation and complete the original goal.");
-            
-            if (!newGoal) return; // User cancelled
-
-            await fetch(`/ui/replan_task/${taskId}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ goal: newGoal, context: { user: "operator", reason: "Manual replan" } })
-            });
-            fetchTasks(); // Refresh list immediately
-        }
-
-        // Initial fetch
-        fetchTasks();
-    </script>
+    // Preload asset in header (best-effort)
+    (function preloadAsset(){
+      const img = document.getElementById('asset-logo');
+      img.onerror = () => { img.style.display='none'; document.getElementById('logo').textContent='S'; }
+      img.onload = () => { console.log('Asset loaded from: ', FILE_ASSET_URL); }
+      img.src = FILE_ASSET_URL;
+    })();
+  </script>
 </body>
 </html>

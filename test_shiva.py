@@ -1,127 +1,182 @@
-# 📄 test_invoke.py
+#!/usr/bin/env python3
+"""
+SHIVA FULL WORKFLOW TEST HARNESS (Updated for approved_once + pending_action)
+"""
+
+import time
 import requests
 import json
-import time
-import uuid
+import sys
 
-# --- CORRECTED PORTS TO MATCH integration-compose.yml ---
-MANAGER_URL = "http://localhost:8003"   # Mapped to container port 8001
-OVERSEER_URL = "http://localhost:8002"    # Mapped to container port 8004
-DIRECTORY_URL = "http://localhost:8005"   # Mapped to container port 8005
-# --- END CORRECTION ---
-
-# --- Authentication ---
 API_KEY = "mysecretapikey"
-AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
-# ---
+H = {"X-SHIVA-SECRET": API_KEY, "Content-Type": "application/json"}
 
-def print_header(title):
-    print("\n" + "="*50)
-    print(f" {title}")
-    print("="*50)
+MANAGER = "http://127.0.0.1:8001"
+GUARDIAN = "http://127.0.0.1:8003"
+PARTNER = "http://127.0.0.1:8002"
+HUB     = "http://127.0.0.1:8006"
+OVERSEER = "http://127.0.0.1:8004"
 
-def invoke_task(task_prompt, task_context):
-    print_header(f"Test: Manager /invoke (Async)")
-    print(f"Goal: {task_prompt}")
-    
-    # --- FIX IS HERE ---
-    # The API expects 'goal', not 'prompt'.
-    # The 'task_id' is already in the context, so it's not needed at the root.
-    payload = {
-        "goal": task_prompt,
-        "context": task_context
+def pretty(o): print(json.dumps(o, indent=2))
+
+
+print("\n============================================")
+print("🔥 SHIVA FULL WORKFLOW TEST HARNESS RUNNING")
+print("============================================\n")
+
+
+# -------------------------------------------------------------------
+# STEP 1 — MANAGER INVOKE
+# -------------------------------------------------------------------
+goal = "Check connectivity to 8.8.8.8"
+print(f"→ Invoking Manager with goal: '{goal}'")
+
+resp = requests.post(
+    f"{MANAGER}/invoke",
+    headers=H,
+    json={"goal": goal, "context": {}}
+)
+
+try:
+    invoke = resp.json()
+except:
+    print("❌ Manager returned non-JSON:", resp.text)
+    sys.exit()
+
+pretty(invoke)
+
+task_id = invoke["task_id"]
+print(f"\n→ Extracted task_id: {task_id}\n")
+
+
+# -------------------------------------------------------------------
+# STEP 2 — POLL MANAGER
+# -------------------------------------------------------------------
+print("→ Polling Manager for task status...\n")
+
+count = 0
+status = None
+
+while True:
+    r = requests.get(f"{MANAGER}/task/{task_id}/status", headers=H)
+    status = r.json()
+    count += 1
+
+    print(f"   [{count}] Status =", status["status"])
+
+    if status["status"] in (
+        "FAILED", "REJECTED", "COMPLETED",
+        "WAITING_APPROVAL", "PAUSED_DEVIATION"
+    ):
+        break
+
+    time.sleep(1)
+
+
+# -------------------------------------------------------------------
+# STEP 3 — APPROVAL FLOW
+# -------------------------------------------------------------------
+if status["status"] == "WAITING_APPROVAL":
+    print("\n⚠️ Guardian requires approval. Sending APPROVE...")
+
+    a = requests.post(
+        f"{MANAGER}/task/{task_id}/approve",
+        headers=H
+    )
+    print("→ Approve response:")
+    pretty(a.json())
+
+    print("\n→ Re-polling after approval...\n")
+    for i in range(20):
+        s2 = requests.get(f"{MANAGER}/task/{task_id}/status", headers=H).json()
+        print(f"   [{i}] Status =", s2["status"])
+        status = s2
+        if status["status"] in ("COMPLETED", "FAILED", "REJECTED"):
+            break
+        time.sleep(1)
+
+
+# -------------------------------------------------------------------
+# STEP 4 — FINAL STATUS
+# -------------------------------------------------------------------
+print("\n====================================")
+print(" FINAL TASK STATUS")
+print("====================================")
+pretty(status)
+
+
+# -------------------------------------------------------------------
+# STEP 5 — RESOURCE HUB TEST
+# -------------------------------------------------------------------
+print("\n-------------------------------------")
+print(" RESOURCE HUB: /tools/list")
+print("-------------------------------------")
+pretty(requests.get(f"{HUB}/tools/list", headers=H).json())
+
+print("\n→ Executing tool: ping_host(8.8.8.8)")
+pretty(
+    requests.post(
+        f"{HUB}/tools/execute",
+        headers=H,
+        json={"tool_name": "ping_host", "parameters": {"host": "8.8.8.8"}}
+    ).json()
+)
+
+
+# -------------------------------------------------------------------
+# STEP 6 — GUARDIAN DIRECT TEST
+# -------------------------------------------------------------------
+print("\n-------------------------------------")
+print(" GUARDIAN: /guardian/validate_action DIRECT TEST")
+print("-------------------------------------")
+
+gtest = requests.post(
+    f"{GUARDIAN}/guardian/validate_action",
+    headers=H,
+    json={
+        "task_id": "debug-test",
+        "proposed_action": "ping_host",
+        "action_input": {"host": "8.8.8.8"},
+        "context": {}
     }
-    # --- END FIX ---
-    
-    try:
-        # 1. Send the initial request
-        response = requests.post(
-            f"{MANAGER_URL}/invoke",
-            json=payload,
-            headers=AUTH_HEADER
-        )
-        response.raise_for_status()
-        
-        if response.status_code == 202:
-            print("✅ Success! Manager accepted the task (202 Accepted).")
-            data = response.json()
-            task_id = data.get("task_id")
-            status_url = f"{MANAGER_URL}{data.get('status_url')}"
-            print(f"   Task ID: {task_id}")
-            print(f"   Status URL: {status_url}")
-            
-            # 2. Poll the status URL
-            print("\nPolling task status... (Check the Overseer dashboard!)")
-            current_status = ""
-            while current_status not in ["COMPLETED", "REJECTED", "FAILED", "PAUSED_DEVIATION"]:
-                time.sleep(1.0) # Slowed polling for demo readability
-                r_status = requests.get(status_url, headers=AUTH_HEADER)
-                status_data = r_status.json()
-                new_status = status_data.get("status")
-                
-                if new_status != current_status:
-                    current_status = new_status
-                    print(f"   [Task: {task_id}] Status updated to: {current_status}")
-            
-            print("\n--- Final Task Status ---")
-            print(json.dumps(status_data, indent=2))
-            print("-------------------------")
-        else:
-            print(f"❌ Error! Status Code: {response.status_code}")
-            print(response.text)
+)
+pretty(gtest.json())
 
-    except requests.exceptions.RequestException as e:
-        print(f"❌ FAILED: Could not connect to Manager Service at {MANAGER_URL}")
-        print(f"   Error: {e}")
-        print("   Please ensure all 6 services are running via docker-compose.")
-        
-# --- Demo Scenarios ---
-def run_scenario_1_success():
-    """
-    This prompt will use the dummy data from itsm_data.json.
-    It will require the agent to use the 'get_itsm_ticket' and 'query_knowledge_base' tools.
-    The Guardian should allow it.
-    """
-    task_id = f"task_{uuid.uuid4()}"
-    task_prompt = "A user named Bob Smith is having VPN issues. Please find his ticket, query the knowledge base for a solution, and provide a summary of the next steps."
-    task_context = {
-        "user": "demo_user",
-        "priority": "medium",
-        "task_id": task_id
+
+# -------------------------------------------------------------------
+# STEP 7 — PARTNER DIRECT TEST (Updated)
+# -------------------------------------------------------------------
+print("\n-------------------------------------")
+print(" PARTNER: /partner/execute_goal DIRECT TEST")
+print("-------------------------------------")
+
+ptest = requests.post(
+    f"{PARTNER}/partner/execute_goal",
+    headers=H,
+    json={
+        "task_id": "debug-test2",
+        "current_step_goal": "Ping test to 8.8.8.8",
+        "approved_plan": {"steps": [{"step_id": 1}]},
+        "context": {},
+        "pending_action": {
+            "action": "ping_host",
+            "action_input": {"host": "8.8.8.8"},
+            "step_goal": "Ping test to 8.8.8.8"
+        }
     }
-    invoke_task(task_prompt, task_context)
-
-def run_scenario_2_guardian_deny():
-    """
-    This prompt will violate the "Disallow: delete" policy 
-    from policy_router.py. The Guardian should deny the plan.
-    """
-    task_id = f"task_{uuid.uuid4()}"
-    task_prompt = "The system is slow. Please delete all old log files on the production server to free up space."
-    task_context = {
-        "user": "demo_user_admin",
-        "priority": "high",
-        "task_id": task_id
-    }
-    invoke_task(task_prompt, task_context)
+)
+pretty(ptest.json())
 
 
-if __name__ == "__main__":
-    print("Waiting 5 seconds for services to boot...")
-    time.sleep(5)
-    
-    # --- RUN DEMO SCENARIO 1 ---
-    run_scenario_1_success()
-    
-    print("\n" + "="*50)
-    print("Scenario 1 complete. Waiting 10s before Scenario 2...")
-    print("="*50)
-    time.sleep(10)
+# -------------------------------------------------------------------
+# STEP 8 — OVERSEER LOG DUMP
+# -------------------------------------------------------------------
+print("\n-------------------------------------")
+print(" OVERSEER: last 50 logs")
+print("-------------------------------------")
+pretty(requests.get(f"{OVERSEER}/logs?limit=50", headers=H).json())
 
-    # --- RUN DEMO SCENARIO 2 ---
-    run_scenario_2_guardian_deny()
-    
-    print("\n" + "="*50)
-    print("All demo scenarios complete.")
-    print(f"Check the full log stream at {OVERSEER_URL}")
-    print("="*50)
+
+print("\n============================================")
+print("🎉 SHIVA END-TO-END TEST COMPLETED")
+print("============================================\n")

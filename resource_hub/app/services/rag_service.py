@@ -1,128 +1,49 @@
-import time
-import uuid
-import traceback
-import chromadb
+# resource_hub/app/services/rag_service.py
+
+"""
+RAG + Plan Expansion service layer for SHIVA Resource Hub.
+- Long-term memory read/write (Chroma)
+- Store QA pairs
+- Dynamic multi-step plan generation (Gemini → fallback)
+"""
+
+import os
+import json
+import re  
+from typing import List, Dict
+
 from app.core.config import settings
-from sklearn.feature_extraction.text import HashingVectorizer
+from app.core.gemini_client import ask_gemini
+from core.logging_client import send_log
 
-# --- Chroma Setup ---
-_COLLECTION_NAME = "resource_hub_mem"
-_client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+from memory.long_term import remember_memory, recall_memory
+from memory.short_term import save_short_term
 
-# --- Embedding Setup ---
-try:
-    from sentence_transformers import SentenceTransformer
-    _embedder = SentenceTransformer(settings.EMBEDDING_MODEL)
-    print("[RAG] sentence-transformers loaded.")
-except Exception as e:
-    _embedder = None
-    print(f"[RAG] sentence-transformers not available; using hashing fallback")
-    _vectorizer = HashingVectorizer(n_features=256)
-    print("[RAG] HashingVectorizer ready (dim=256).")
-
-
-def _ensure_collection():
+# --------------------------
+# RAG: RECALL
+# --------------------------
+def recall(query: str, k: int = 3):
     try:
-        return _client.get_collection(_COLLECTION_NAME)
-    except Exception:
-        coll = _client.create_collection(name=_COLLECTION_NAME)
-        print(f"[RAG] Created new Chroma collection: {_COLLECTION_NAME}")
-        return coll
-
-
-def embed_texts(texts):
-    if _embedder:
-        return _embedder.encode(texts).tolist()
-    return _vectorizer.transform(texts).toarray().tolist()
-
-
-def store_qa(question, answer, metadata=None, task_id="manual"):
-    try:
-        collection = _ensure_collection()
-        qa_text = f"Q: {question}\nA: {answer}"
-
-        # --- DEDUPLICATION GUARD ---
-        existing = collection.query(
-            query_texts=[question],
-            n_results=3,
-            include=["documents"]
-        )
-        for doc in existing.get("documents", [[]])[0]:
-            if question.strip().lower() in doc.lower():
-                print(f"[RAG] Skipping duplicate QA: '{question}'")
-                return {"status": "skipped", "reason": "duplicate"}
-
-        embedding = embed_texts([qa_text])
-        doc_id = str(uuid.uuid4())
-        metadata = metadata or {}
-        metadata.update({
-            "task_id": task_id,
-            "created_at": time.time(),
-            "chunk_index": 0,
-        })
-        collection.add(
-            ids=[f"{doc_id}#0"],
-            documents=[qa_text],
-            embeddings=embedding,
-            metadatas=[metadata]
-        )
-        print(f"[RAG] Stored QA -> {question[:50]}... | ID={doc_id}")
-        return {"status": "ok", "id": doc_id}
+        return recall_memory(query, top_k=k)
     except Exception as e:
-        print(f"[RAG] Error in store_qa: {e}")
-        traceback.print_exc()
-        return {"status": "error", "error": str(e)}
-
-
-def recall(query, k=3):
-    try:
-        collection = _ensure_collection()
-        query_embedding = embed_texts([query])
-        results = collection.query(
-            query_embeddings=query_embedding,
-            n_results=k,
-            include=["documents", "metadatas", "distances"]
-        )
-        hits = []
-        for i, doc in enumerate(results.get("documents", [[]])[0]):
-            hit = {
-                "id": results["ids"][0][i],
-                "text": doc,
-                "metadata": results["metadatas"][0][i],
-                "score": results["distances"][0][i],
-            }
-            hits.append(hit)
-        return hits
-    except Exception as e:
-        print(f"[RAG] Error in recall(): {e}")
-        traceback.print_exc()
+        print("[RAG] recall failed:", e)
         return []
 
-
-def remember_document(text, metadata=None, task_id="auto"):
-    q = "What information does this document contain?"
-    a = text
-    return store_qa(q, a, metadata=metadata or {"source": "auto-ingest"}, task_id=task_id)
-
-
-def list_all():
+# --------------------------
+# STORE QA
+# --------------------------
+def store_qa(question: str, answer: str, metadata=None, task_id: str = None):
     try:
-        collection = _ensure_collection()
-        data = collection.get(include=["documents", "metadatas"])
-        return data
+        doc = f"Q: {question}\nA: {answer}"
+        meta = metadata or {}
+        meta.update({"type": "qa"})
+        return remember_memory(doc, meta)
     except Exception as e:
-        print(f"[RAG] Error in list_all(): {e}")
-        return {}
+        send_log("resource_hub", task_id, "WARN", f"store_qa failed: {e}")
+        return None
 
-
-def wipe_all():
-    try:
-        _client.delete_collection(_COLLECTION_NAME)
-        print(f"[RAG] Wiped collection: {_COLLECTION_NAME}")
-    except Exception as e:
-        print(f"[RAG] Error wiping collection: {e}")
-
-# --- Compatibility alias for older code ---
-def _get_collection():
-    """Alias for older code expecting _get_collection()."""
-    return _ensure_collection()
+# --------------------------
+# DOCUMENT INGEST
+# --------------------------
+def remember_document(text: str, metadata=None):
+    return remember_memory(text, metadata or {})

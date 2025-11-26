@@ -283,26 +283,60 @@ def _finalize(decision: str, reasons: List[str], components: List[float], detail
         "details": details
     }
 
-def analyze_payload(payload: Dict[str, Any], policies: Optional[List[str]] = None) -> Dict[str, Any]:
-    if "proposed_action" in payload:
-        result = analyze_action_payload(payload, policies)
-    elif "plan" in payload:
-        result = analyze_plan_payload(payload, policies)
-    else:
-        result = {
+def analyze_payload(structured_payload: dict, policies: list):
+    """
+    structured_payload = {
+        "task_id": str,
+        "action": str,
+        "params": dict,
+        "context": dict
+    }
+    """
+
+    action = structured_payload.get("action", "")
+    params = structured_payload.get("params", {})
+    ctx = structured_payload.get("context", {})
+
+    # basic forbidden keywords
+    forbidden = ["delete", "shutdown", "rm -rf", "format", "drop database"]
+    if any(f in action.lower() for f in forbidden):
+        return {
             "decision": "Deny",
-            "approved": False,
-            "score": 1.0,
-            "one_liner": "Deny — missing 'plan' or 'proposed_action'",
-            "reasons": ["missing_payload_field"],
-            "details": {}
+            "one_liner": "Dangerous action",
+            "reasons": ["forbidden_keyword"],
+            "details": structured_payload
         }
 
-    # ✅ Explicitly allow clean cases (fallback)
-    if not result.get("decision"):
-        result["decision"] = "Allow"
-        result["approved"] = True
-        result["score"] = 0.0
-        result["one_liner"] = "No safety risks detected"
+    # check policy restrictions
+    if any("Disallow" in p for p in policies):
+        for p in policies:
+            if p.startswith("Disallow: "):
+                rule = p.split("Disallow: ")[1]
+                if rule in action.lower():
+                    return {
+                        "decision": "Deny",
+                        "one_liner": f"Disallowed by policy: {rule}",
+                        "reason": rule
+                    }
 
-    return result
+    # Off hours
+    import datetime
+    hour = datetime.datetime.now().hour
+    if hour >= 19 or hour < 7:
+        return {
+            "decision": "Ambiguous",
+            "one_liner": "Ambiguous — off_hours",
+            "approved": False,
+            "score": 0.62,
+            "reasons": ["off_hours"],
+            "details": structured_payload
+        }
+
+    # Default safe
+    return {
+        "decision": "Allow",
+        "one_liner": "Action safe",
+        "details": structured_payload,
+        "score": 1.0
+    }
+

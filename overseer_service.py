@@ -1,247 +1,282 @@
+# overseer_service.py
 """
-Overseer Service for SHIVA
-- /log/event  (POST)  <- structured logs
-- /control/kill (POST) -> set HALT or RESUME
-- /control/status (GET) -> {status: "OK"/"HALT"}
-- WebSocket endpoint: /ws/logs -> broadcast logs in real-time
-- /logs (GET) -> query logs, filter by service/task_id
+Overseer service for SHIVA
+- Receives logs via POST /log/event
+- Broadcasts logs to connected WebSocket clients at /ws/logs
+- Provides UI proxy endpoints: /ui/tasks, /ui/approve_task/{id}, /ui/replan_task/{id}
+- Services health aggregator: /services/healthz
+- Small memory stats proxy: /memory/stats (best-effort)
 """
 
+import asyncio
+import json
 import os
 import time
-import threading
-import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import uvicorn
+from typing import Dict, Any, List
+
 import httpx
-import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
 
-# ============================================================
-# SERVICE CONFIG
-# ============================================================
-API_KEY = os.getenv("SHARED_SECRET", "mysecretapikey")
+SHARED_SECRET = os.getenv("SHARED_SECRET", "mysecretapikey")
+AUTH_HEADER = {"X-SHIVA-SECRET": SHARED_SECRET}
+DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://localhost:8005").rstrip("/")
+
+SERVICE_NAME = "overseer"
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", 8004))
-SERVICE_NAME = os.getenv("SERVICE_NAME", "overseer")
-AUTH_HEADER_NAME = "X-SHIVA-SECRET"
+SERVICE_URL = f"http://127.0.0.1:{SERVICE_PORT}"
 
-DIRECTORY_URL = os.getenv("DIRECTORY_URL", "http://127.0.0.1:8005")
-AUTH_HEADER = {"X-SHIVA-SECRET": API_KEY}
+# store last N logs
+MAX_LOGS = int(os.getenv("OVERSEER_MAX_LOGS", 800))
+logs: List[Dict[str, Any]] = []
 
-app = FastAPI(title="SHIVA Overseer")
-
-# ============================================================
-# LOG STORE
-# ============================================================
-LOG_STORE = []
-LOG_LOCK = threading.Lock()
-
-# ============================================================
-# WEBSOCKET MANAGER
-# ============================================================
+# connected websockets
 class ConnectionManager:
     def __init__(self):
-        self.active: list[WebSocket] = []
+        self.active: List[WebSocket] = []
+        self.lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active.append(websocket)
+        async with self.lock:
+            self.active.append(websocket)
 
-    def disconnect(self, websocket: WebSocket):
-        try:
-            self.active.remove(websocket)
-        except ValueError:
-            pass
+    async def disconnect(self, websocket: WebSocket):
+        async with self.lock:
+            if websocket in self.active:
+                self.active.remove(websocket)
 
-    async def broadcast(self, msg: dict):
-        to_remove = []
-        for ws in list(self.active):
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                to_remove.append(ws)
-        for ws in to_remove:
-            self.disconnect(ws)
+    async def broadcast(self, message: Dict[str, Any]):
+        # send to all clients, drop dead connections
+        text = json.dumps(message, default=str)
+        async with self.lock:
+            to_remove = []
+            for ws in list(self.active):
+                try:
+                    await ws.send_text(text)
+                except Exception:
+                    to_remove.append(ws)
+            for r in to_remove:
+                if r in self.active:
+                    self.active.remove(r)
 
 manager = ConnectionManager()
 
-# ============================================================
-# CONTROL STATE
-# ============================================================
-CONTROL_STATE = {"status": "OK", "updated_at": time.time(), "note": ""}
+app = FastAPI(title="SHIVA Overseer")
 
-# ============================================================
-# AUTH HELPER
-# ============================================================
-def _auth_ok(header_val: str | None):
-    return header_val == API_KEY
+# helper to persist log
+def push_log(entry: Dict[str, Any]):
+    if not isinstance(entry, dict):
+        return
+    entry.setdefault("ts", time.time())
+    logs.append(entry.copy())
+    if len(logs) > MAX_LOGS:
+        # remove oldest
+        del logs[0]
 
-# ============================================================
-# DIRECTORY REGISTRATION + HEARTBEAT
-# ============================================================
-def register_self():
-    """Registers this service with the Directory service."""
-    while True:
-        try:
-            r = httpx.post(
-                f"{DIRECTORY_URL}/register",
-                json={
-                    "service_name": SERVICE_NAME,
-                    "service_url": f"http://127.0.0.1:{SERVICE_PORT}",
-                    "ttl_seconds": 60
-                },
-                headers=AUTH_HEADER,
-                timeout=5
-            )
-            if r.status_code == 200:
-                print(f"[Overseer] Registered with Directory at {DIRECTORY_URL}")
-                threading.Thread(target=heartbeat, daemon=True).start()
-                return
-            else:
-                print(f"[Overseer] Registration failed: {r.status_code}")
-        except Exception as e:
-            print(f"[Overseer] Directory unavailable. Retry in 5s. Error: {e}")
-        time.sleep(5)
+async def discover(service_name: str) -> str:
+    """
+    Resolve service URL from Directory.
 
+    Returns full base url (no trailing slash).
+    """
+    async with httpx.AsyncClient(timeout=4) as client:
+        r = await client.get(f"{DIRECTORY_URL}/discover", params={"service_name": service_name}, headers=AUTH_HEADER, timeout=4)
+        r.raise_for_status()
+        return r.json()["url"].rstrip("/")
 
-def heartbeat():
-    """Periodic TTL refresh."""
-    while True:
-        time.sleep(45)
-        try:
-            httpx.post(
-                f"{DIRECTORY_URL}/register",
-                json={
-                    "service_name": SERVICE_NAME,
-                    "service_url": f"http://127.0.0.1:{SERVICE_PORT}",
-                    "ttl_seconds": 60
-                },
-                headers=AUTH_HEADER,
-                timeout=5
-            )
-            print("[Overseer] Heartbeat sent to Directory.")
-        except Exception as e:
-            print(f"[Overseer] Heartbeat failed: {e}. Restarting registration...")
-            register_self()
-            return
-
-# Start registration on startup
-@app.on_event("startup")
-def startup_event():
-    threading.Thread(target=register_self, daemon=True).start()
-
-# ============================================================
-# LOGGING ENDPOINTS
-# ============================================================
-class LogEvent(BaseModel):
-    service: str
-    task_id: str | None = None
-    level: str
-    message: str
-    context: dict | None = {}
-
+# -------- Log ingestion endpoint (services call this) --------
 @app.post("/log/event")
-async def log_event(payload: LogEvent, request: Request, x_shiva_secret: str | None = Header(None)):
-    if not _auth_ok(x_shiva_secret):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+async def receive_log(payload: Dict[str, Any], request: Request):
+    """
+    Expects JSON:
+    {
+      "service": "manager",
+      "task_id": "...",
+      "level": "INFO|WARN|ERROR",
+      "message": "text",
+      "context": {...} (optional)
+    }
+    """
+    # best-effort auth: check header X-SHIVA-SECRET
+    header = request.headers.get("x-shiva-secret") or request.headers.get("X-SHIVA-SECRET")
+    if header != SHARED_SECRET:
+        raise HTTPException(401, "unauthorized")
 
     entry = {
-        "ts": time.time(),
-        "service": payload.service,
-        "task_id": payload.task_id,
-        "level": payload.level,
-        "message": payload.message,
-        "context": payload.context or {}
+        "service": payload.get("service", "unknown"),
+        "task_id": payload.get("task_id"),
+        "level": payload.get("level", "INFO"),
+        "message": payload.get("message", ""),
+        "context": payload.get("context", {}),
+        "ts": time.time()
     }
+    push_log(entry)
 
-    with LOG_LOCK:
-        LOG_STORE.append(entry)
+    # broadcast asynchronously (don't await blocking the caller)
+    asyncio.create_task(manager.broadcast(entry))
+    return {"status": "ok"}
 
-    try:
-        asyncio.create_task(manager.broadcast({"type": "log", "entry": entry}))
-    except Exception:
-        pass
-
-    return JSONResponse(status_code=200, content={"status": "ok", "entry_count": len(LOG_STORE)})
-
-@app.get("/logs")
-async def get_logs(service: str | None = None, task_id: str | None = None, limit: int = 200, x_shiva_secret: str | None = Header(None)):
-    if not _auth_ok(x_shiva_secret):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    with LOG_LOCK:
-        results = [e for e in reversed(LOG_STORE)
-                   if (service is None or e["service"] == service)
-                   and (task_id is None or e["task_id"] == task_id)]
-
-    return {"count": len(results), "logs": results[:limit]}
-
-# ============================================================
-# CONTROL ENDPOINTS
-# ============================================================
-@app.post("/control/kill")
-async def control_kill(payload: dict, x_shiva_secret: str | None = Header(None)):
-    if not _auth_ok(x_shiva_secret):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    action = payload.get("action", "").upper()
-    note = payload.get("note", "")
-
-    if action not in ("HALT", "RESUME"):
-        raise HTTPException(status_code=400, detail="action must be HALT or RESUME")
-
-    CONTROL_STATE["status"] = "HALT" if action == "HALT" else "OK"
-    CONTROL_STATE["updated_at"] = time.time()
-    CONTROL_STATE["note"] = note
-
-    entry = {
-        "ts": time.time(),
-        "service": "overseer",
-        "task_id": None,
-        "level": "CONTROL",
-        "message": f"Control action: {CONTROL_STATE['status']}",
-        "context": {"note": note}
-    }
-
-    with LOG_LOCK:
-        LOG_STORE.append(entry)
-
-    try:
-        asyncio.create_task(manager.broadcast({"type": "control", "state": CONTROL_STATE}))
-    except Exception:
-        pass
-
-    return {"status": CONTROL_STATE["status"], "note": note}
-
-@app.get("/control/status")
-async def control_status(x_shiva_secret: str | None = Header(None)):
-    if not _auth_ok(x_shiva_secret):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return CONTROL_STATE
-
-# ============================================================
-# WEBSOCKET
-# ============================================================
+# -------- WebSocket for UI clients --------
 @app.websocket("/ws/logs")
-async def websocket_logs(ws: WebSocket):
+async def ws_logs(ws: WebSocket):
     await manager.connect(ws)
     try:
-        while True:
-            msg = await ws.receive_text()  # keep alive
-    except WebSocketDisconnect:
-        manager.disconnect(ws)
+        # On connect, send last 40 logs
+        for e in logs[-40:]:
+            await ws.send_text(json.dumps(e, default=str))
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
+        # Heartbeat loop: UI never sends messages, so WE must keep socket alive
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await ws.send_text(json.dumps({"type": "ping", "ts": time.time()}))
+            except Exception:
+                break
+
+    except WebSocketDisconnect:
+        await manager.disconnect(ws)
+    except Exception:
+        await manager.disconnect(ws)
+
+
+# -------- UI proxy endpoints --------
+@app.get("/ui/tasks")
+async def ui_tasks():
+    """
+    Proxy to manager /tasks/list
+    """
+    try:
+        manager_url = await discover("manager")
+    except Exception as e:
+        raise HTTPException(500, f"directory discovery failed: {e}")
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            r = await client.get(f"{manager_url}/tasks/list", headers=AUTH_HEADER, timeout=6)
+            r.raise_for_status()
+            return JSONResponse(r.json())
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(e.response.status_code, f"manager error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(500, f"could not fetch tasks: {e}")
+
+@app.post("/ui/approve_task/{task_id}")
+async def ui_approve_task(task_id: str):
+    """
+    Proxy to manager /task/{task_id}/approve
+    """
+    try:
+        manager_url = await discover("manager")
+    except Exception as e:
+        raise HTTPException(500, f"directory discovery failed: {e}")
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            r = await client.post(f"{manager_url}/task/{task_id}/approve", headers=AUTH_HEADER, timeout=6)
+            r.raise_for_status()
+            return JSONResponse(r.json())
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(e.response.status_code, f"manager error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(500, f"approve failed: {e}")
+
+@app.post("/ui/replan_task/{task_id}")
+async def ui_replan_task(task_id: str, body: Dict[str, Any]):
+    """
+    Proxy to manager replan endpoint:
+    Body: { "goal": "...", "context": {...} }
+    """
+    try:
+        manager_url = await discover("manager")
+    except Exception as e:
+        raise HTTPException(500, f"directory discovery failed: {e}")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.post(f"{manager_url}/task/{task_id}/replan", headers={**AUTH_HEADER, "Content-Type": "application/json"}, json=body, timeout=8)
+            r.raise_for_status()
+            return JSONResponse(r.json())
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(e.response.status_code, f"manager error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(500, f"replan failed: {e}")
+
+# -------- Memory stats (best-effort) --------
+@app.get("/memory/stats")
+async def memory_stats():
+    """
+    Tries to fetch /memory/stats from resource_hub, falls back to counts in logs.
+    """
+    try:
+        hub = await discover("resource_hub")
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{hub}/memory/stats", headers=AUTH_HEADER, timeout=4)
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+
+    # fallback: provide minimal counts calculated from logs (best-effort)
+    short_count = sum(1 for l in logs if l.get("service") == "resource_hub")
+    return {"short_term_count": short_count, "long_term_count": 0, "last_updated": time.time()}
+
+# -------- Services health aggregator --------
+@app.get("/services/healthz")
+async def services_health():
+    """
+    Query a set of core services for their /healthz endpoints.
+    Returns { service_name: {"ok": bool, "url": "...", "status": (json or text)} }
+    """
+    services = ["manager", "partner", "guardian", "resource_hub", "directory", "overseer"]
+    results = {}
+    async with httpx.AsyncClient(timeout=3) as client:
+        for s in services:
+            try:
+                if s == "directory":
+                    url = DIRECTORY_URL
+                elif s == "overseer":
+                    url = SERVICE_URL
+                else:
+                    # try directory discovery for each service
+                    try:
+                        url = (await discover(s))
+                    except Exception:
+                        # fallback to common local host names
+                        url = f"http://{s}:8000"
+                # prefer /healthz
+                try:
+                    r = await client.get(f"{url}/healthz", headers=AUTH_HEADER, timeout=2)
+                    if r.status_code == 200:
+                        results[s] = {"ok": True, "url": url, "status": r.json()}
+                    else:
+                        results[s] = {"ok": False, "url": url, "status": r.text}
+                except Exception as e:
+                    results[s] = {"ok": False, "url": url, "status": str(e)}
+            except Exception as e:
+                results[s] = {"ok": False, "url": None, "status": str(e)}
+    return results
+
+# -------- UI: simple last-50 logs endpoint --------
+@app.get("/ui/logs")
+async def ui_logs(limit: int = 50):
+    recent = list(logs[-limit:])
+    return {"logs": recent}
+
+@app.get("/logs")
+async def logs_alias(limit: int = 50):
+    """
+    Alias so test_shiva.py can retrieve last logs using /logs
+    """
+    recent = list(logs[-limit:])
+    return {"logs": recent}
+
+# -------- root health --------
 @app.get("/healthz")
-def healthz():
+async def healthz():
     return {"status": "ok", "service": SERVICE_NAME}
 
-# ============================================================
-# MAIN
-# ============================================================
 if __name__ == "__main__":
     print(f"Starting Overseer on 0.0.0.0:{SERVICE_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT, log_level="info")
